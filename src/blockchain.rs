@@ -134,7 +134,6 @@ impl BlockchainClient {
                     depth: event.depth,
                     bucket_depth: event.bucketDepth,
                     immutable_flag: event.immutableFlag,
-                    normalised_balance_per_chunk: event.normalisedBalancePerChunk.to_string(),
                 },
             }));
         }

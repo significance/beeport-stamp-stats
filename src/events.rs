@@ -2,8 +2,9 @@ use alloy::sol;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// PostageStamp contract address on Gnosis Chain
-pub const POSTAGE_STAMP_ADDRESS: &str = "0x6a1A21eca3aB28BE85C7Ba22b2d6eAe5907c9008";
+// PostageStamp contract address on Gnosis Chain (from ethersphere/storage-incentives mainnet_deployed.json)
+// https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293
+pub const POSTAGE_STAMP_ADDRESS: &str = "0x45a1502382541Cd610CC9068e88727426b696293";
 
 // Solidity contract definition using alloy's sol! macro
 sol! {
@@ -55,12 +56,6 @@ sol! {
                     "internalType": "bool",
                     "name": "immutableFlag",
                     "type": "bool"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "normalisedBalancePerChunk",
-                    "type": "uint256"
                 }
             ],
             "name": "BatchCreated",
@@ -158,7 +153,6 @@ pub enum EventData {
         depth: u8,
         bucket_depth: u8,
         immutable_flag: bool,
-        normalised_balance_per_chunk: String,
     },
     BatchTopUp {
         topup_amount: String,
@@ -209,7 +203,6 @@ mod tests {
                 depth: 20,
                 bucket_depth: 16,
                 immutable_flag: false,
-                normalised_balance_per_chunk: "1000".to_string(),
             },
         };
 

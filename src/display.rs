@@ -274,7 +274,6 @@ mod tests {
             depth: 20,
             bucket_depth: 16,
             immutable_flag: false,
-            normalised_balance_per_chunk: "1000".to_string(),
         };
 
         let formatted = format_event_details(&data);

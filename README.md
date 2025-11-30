@@ -269,8 +269,7 @@ block_number,timestamp,event_type,batch_id,transaction_hash,log_index,details
       "owner": "0x5678",
       "depth": 20,
       "bucket_depth": 16,
-      "immutable_flag": false,
-      "normalised_balance_per_chunk": "1000"
+      "immutable_flag": false
     }
   }
 ]
