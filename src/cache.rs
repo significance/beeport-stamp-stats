@@ -1,7 +1,7 @@
-use crate::events::{BatchInfo, EventData, EventType, StampEvent};
 use crate::error::Result;
+use crate::events::{BatchInfo, EventData, EventType, StampEvent};
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{Row, sqlite::SqlitePool};
 use std::path::Path;
 
 #[derive(Clone)]
@@ -175,8 +175,8 @@ impl Cache {
             let data: EventData = serde_json::from_str(&data_str)?;
 
             let timestamp: i64 = row.get("block_timestamp");
-            let block_timestamp = DateTime::from_timestamp(timestamp, 0)
-                .unwrap_or_else(|| Utc::now());
+            let block_timestamp =
+                DateTime::from_timestamp(timestamp, 0).unwrap_or_else(|| Utc::now());
 
             events.push(StampEvent {
                 event_type,
@@ -226,8 +226,7 @@ impl Cache {
                 bucket_depth: row.get::<i64, _>("bucket_depth") as u8,
                 immutable: immutable != 0,
                 normalised_balance: row.get("normalised_balance"),
-                created_at: DateTime::from_timestamp(created_at, 0)
-                    .unwrap_or_else(|| Utc::now()),
+                created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(|| Utc::now()),
             });
         }
 

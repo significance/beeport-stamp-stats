@@ -2,7 +2,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::{batch, cache::Cache, blockchain::BlockchainClient, display, export, events::EventType};
+use crate::{
+    batch, blockchain::BlockchainClient, cache::Cache, display, events::EventType, export,
+};
 
 /// Beeport Postage Stamp Statistics Tool
 ///
@@ -107,7 +109,10 @@ impl FilterEventType {
             (self, event_type),
             (FilterEventType::BatchCreated, EventType::BatchCreated)
                 | (FilterEventType::BatchTopUp, EventType::BatchTopUp)
-                | (FilterEventType::BatchDepthIncrease, EventType::BatchDepthIncrease)
+                | (
+                    FilterEventType::BatchDepthIncrease,
+                    EventType::BatchDepthIncrease
+                )
         )
     }
 }
@@ -140,14 +145,47 @@ impl Cli {
         let cache = Cache::new(&self.cache_db).await?;
 
         match &self.command {
-            Commands::Fetch { from_block, to_block, incremental } => {
-                self.execute_fetch(cache, *from_block, *to_block, *incremental).await
+            Commands::Fetch {
+                from_block,
+                to_block,
+                incremental,
+            } => {
+                self.execute_fetch(cache, *from_block, *to_block, *incremental)
+                    .await
             }
-            Commands::Summary { group_by, months, event_type, batch_id } => {
-                self.execute_summary(cache, group_by.clone(), *months, event_type.clone(), batch_id.clone()).await
+            Commands::Summary {
+                group_by,
+                months,
+                event_type,
+                batch_id,
+            } => {
+                self.execute_summary(
+                    cache,
+                    group_by.clone(),
+                    *months,
+                    event_type.clone(),
+                    batch_id.clone(),
+                )
+                .await
             }
-            Commands::Export { data_type, output, format, months, event_type, batch_id } => {
-                self.execute_export(cache, data_type.clone(), output, format.clone(), *months, event_type.clone(), batch_id.clone()).await
+            Commands::Export {
+                data_type,
+                output,
+                format,
+                months,
+                event_type,
+                batch_id,
+            } => {
+                self.execute_export(
+                    cache,
+                    data_type.clone(),
+                    output,
+                    format.clone(),
+                    *months,
+                    event_type.clone(),
+                    batch_id.clone(),
+                )
+                .await
             }
         }
     }
@@ -169,14 +207,23 @@ impl Cli {
             cache.get_last_block().await?.map(|b| b + 1)
         } else {
             from_block
-        }.unwrap_or(19275989); // PostageStamp contract deployment block on Gnosis
+        }
+        .unwrap_or(19275989); // PostageStamp contract deployment block on Gnosis
 
         let to = to_block.unwrap_or_else(|| {
             // We'll get latest block from the client
             u64::MAX
         });
 
-        tracing::info!("Fetching events from block {} to {}", from, if to == u64::MAX { "latest".to_string() } else { to.to_string() });
+        tracing::info!(
+            "Fetching events from block {} to {}",
+            from,
+            if to == u64::MAX {
+                "latest".to_string()
+            } else {
+                to.to_string()
+            }
+        );
 
         // Fetch and display events
         let events = client.fetch_batch_events(from, to).await?;
@@ -193,7 +240,11 @@ impl Cli {
         cache.store_events(&events).await?;
         cache.store_batches(&batches).await?;
 
-        tracing::info!("Cached {} events and {} batches", events.len(), batches.len());
+        tracing::info!(
+            "Cached {} events and {} batches",
+            events.len(),
+            batches.len()
+        );
 
         Ok(())
     }
@@ -227,7 +278,11 @@ impl Cli {
             batches.retain(|b| b.batch_id.contains(filter));
         }
 
-        tracing::info!("Loaded {} events and {} batches from cache", events.len(), batches.len());
+        tracing::info!(
+            "Loaded {} events and {} batches from cache",
+            events.len(),
+            batches.len()
+        );
 
         // Display summary
         display::display_summary(&events, &batches, group_by)?;
@@ -310,9 +365,11 @@ mod tests {
     fn test_cli_parsing() {
         let cli = Cli::parse_from(&[
             "beeport-stamp-stats",
-            "--rpc-url", "http://localhost:8545",
+            "--rpc-url",
+            "http://localhost:8545",
             "fetch",
-            "--from-block", "1000000",
+            "--from-block",
+            "1000000",
         ]);
 
         assert_eq!(cli.rpc_url, "http://localhost:8545");
@@ -329,8 +386,10 @@ mod tests {
         let cli = Cli::parse_from(&[
             "beeport-stamp-stats",
             "summary",
-            "--group-by", "month",
-            "--months", "6",
+            "--group-by",
+            "month",
+            "--months",
+            "6",
         ]);
 
         match cli.command {

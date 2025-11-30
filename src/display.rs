@@ -3,8 +3,8 @@ use crate::cli::GroupBy;
 use crate::error::Result;
 use crate::events::{BatchInfo, EventData, EventType, StampEvent};
 use tabled::{
-    settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
+    settings::{Alignment, Modify, Style, object::Rows},
 };
 
 /// Display events in a markdown table
@@ -146,7 +146,10 @@ pub fn display_summary(
     // Most active period
     if let Some(most_active) = period_stats.iter().max_by_key(|s| s.total_events) {
         println!("### Most Active Period\n");
-        println!("**{}** with {} events\n", most_active.period_label, most_active.total_events);
+        println!(
+            "**{}** with {} events\n",
+            most_active.period_label, most_active.total_events
+        );
     }
 
     // Batch details

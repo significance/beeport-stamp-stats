@@ -1,10 +1,10 @@
-mod cli;
+mod batch;
 mod blockchain;
 mod cache;
-mod events;
-mod batch;
+mod cli;
 mod display;
 mod error;
+mod events;
 mod export;
 
 use anyhow::Result;

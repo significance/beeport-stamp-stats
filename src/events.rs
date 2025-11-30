@@ -184,7 +184,10 @@ mod tests {
     fn test_event_type_display() {
         assert_eq!(EventType::BatchCreated.to_string(), "BatchCreated");
         assert_eq!(EventType::BatchTopUp.to_string(), "BatchTopUp");
-        assert_eq!(EventType::BatchDepthIncrease.to_string(), "BatchDepthIncrease");
+        assert_eq!(
+            EventType::BatchDepthIncrease.to_string(),
+            "BatchDepthIncrease"
+        );
     }
 
     #[test]

@@ -16,10 +16,7 @@ pub struct PeriodStats {
 }
 
 /// Aggregate events by time period
-pub fn aggregate_events(
-    events: &[StampEvent],
-    group_by: &crate::cli::GroupBy,
-) -> Vec<PeriodStats> {
+pub fn aggregate_events(events: &[StampEvent], group_by: &crate::cli::GroupBy) -> Vec<PeriodStats> {
     let mut periods: HashMap<String, PeriodStatsBuilder> = HashMap::new();
 
     for event in events {

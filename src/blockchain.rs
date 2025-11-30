@@ -1,6 +1,6 @@
 use crate::error::{Result, StampError};
 use crate::events::{
-    BatchInfo, EventData, EventType, PostageStamp, StampEvent, POSTAGE_STAMP_ADDRESS,
+    BatchInfo, EventData, EventType, POSTAGE_STAMP_ADDRESS, PostageStamp, StampEvent,
 };
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
@@ -18,10 +18,11 @@ pub struct BlockchainClient {
 impl BlockchainClient {
     /// Create a new blockchain client
     pub async fn new(rpc_url: &str) -> Result<Self> {
-        let provider = ProviderBuilder::new()
-            .on_http(rpc_url.parse().map_err(|e| {
-                StampError::Rpc(format!("Invalid RPC URL: {}", e))
-            })?);
+        let provider = ProviderBuilder::new().on_http(
+            rpc_url
+                .parse()
+                .map_err(|e| StampError::Rpc(format!("Invalid RPC URL: {}", e)))?,
+        );
 
         let contract_address = Address::from_str(POSTAGE_STAMP_ADDRESS)
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
@@ -59,11 +60,7 @@ impl BlockchainClient {
         while current_from <= to_block {
             let current_to = std::cmp::min(current_from + CHUNK_SIZE - 1, to_block);
 
-            tracing::info!(
-                "Fetching chunk: blocks {} to {}",
-                current_from,
-                current_to
-            );
+            tracing::info!("Fetching chunk: blocks {} to {}", current_from, current_to);
 
             // Create filter for all PostageStamp events
             let filter = Filter::new()
