@@ -3,7 +3,10 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::{
-    batch, blockchain::BlockchainClient, cache::Cache, display, events::EventType, export,
+    batch, blockchain::BlockchainClient, cache::Cache, display,
+    events::{EventType, DEFAULT_START_BLOCK},
+    export,
+    hooks::{EventHook, StubHook},
 };
 
 /// Beeport Postage Stamp Statistics Tool
@@ -86,6 +89,17 @@ pub enum Commands {
         /// Filter by batch ID (partial match supported)
         #[arg(long)]
         batch_id: Option<String>,
+    },
+
+    /// Follow blockchain for new events in real-time
+    Follow {
+        /// Poll interval in seconds
+        #[arg(long, default_value = "12")]
+        poll_interval: u64,
+
+        /// Display events as they arrive
+        #[arg(long, default_value = "true")]
+        display: bool,
     },
 }
 
@@ -187,6 +201,10 @@ impl Cli {
                 )
                 .await
             }
+            Commands::Follow {
+                poll_interval,
+                display,
+            } => self.execute_follow(cache, *poll_interval, *display).await,
         }
     }
 
@@ -208,7 +226,7 @@ impl Cli {
         } else {
             from_block
         }
-        .unwrap_or(19275989); // PostageStamp contract deployment block on Gnosis
+        .unwrap_or(DEFAULT_START_BLOCK);
 
         let to = to_block.unwrap_or_else(|| {
             // We'll get latest block from the client
@@ -354,6 +372,107 @@ impl Cli {
         println!("✅ Exported to: {}", output.display());
 
         Ok(())
+    }
+
+    async fn execute_follow(
+        &self,
+        cache: Cache,
+        poll_interval: u64,
+        display: bool,
+    ) -> Result<()> {
+        use tokio::time::{interval, Duration};
+
+        tracing::info!("Starting follow mode with {}s poll interval", poll_interval);
+
+        // Create blockchain client
+        let client = BlockchainClient::new(&self.rpc_url).await?;
+
+        // Create event hook
+        let hook = StubHook;
+
+        // First, ensure historical sync
+        let last_synced_block = cache.get_last_block().await?.unwrap_or(DEFAULT_START_BLOCK);
+        tracing::info!(
+            "Last synced block: {} - catching up to latest...",
+            last_synced_block
+        );
+
+        // Fetch all events up to current block
+        let latest_block = client.fetch_batch_events(last_synced_block + 1, u64::MAX).await?;
+        let current_latest = if !latest_block.is_empty() {
+            latest_block.last().unwrap().block_number
+        } else {
+            last_synced_block
+        };
+
+        if !latest_block.is_empty() {
+            tracing::info!(
+                "Historical sync: found {} events from block {} to {}",
+                latest_block.len(),
+                last_synced_block + 1,
+                current_latest
+            );
+
+            // Cache historical events
+            let batches = client.fetch_batch_info(&latest_block).await?;
+            cache.store_events(&latest_block).await?;
+            cache.store_batches(&batches).await?;
+
+            if display {
+                display::display_events(&latest_block)?;
+            }
+        } else {
+            tracing::info!("Already up to date at block {}", last_synced_block);
+        }
+
+        println!(
+            "\n🔄 Following blockchain for new events (polling every {}s)...",
+            poll_interval
+        );
+        println!("Press Ctrl+C to stop\n");
+
+        // Now follow for new events
+        let mut poll_timer = interval(Duration::from_secs(poll_interval));
+        let mut last_checked_block = current_latest;
+
+        loop {
+            poll_timer.tick().await;
+
+            // Fetch new events since last check
+            let new_events = client
+                .fetch_batch_events(last_checked_block + 1, u64::MAX)
+                .await?;
+
+            if !new_events.is_empty() {
+                tracing::info!("Found {} new events", new_events.len());
+
+                // Invoke hooks for each new event
+                for event in &new_events {
+                    hook.on_event(event);
+                }
+
+                // Cache new events
+                let batches = client.fetch_batch_info(&new_events).await?;
+                cache.store_events(&new_events).await?;
+                cache.store_batches(&batches).await?;
+
+                // Display if requested
+                if display {
+                    display::display_events(&new_events)?;
+                }
+
+                // Update last checked block
+                last_checked_block = new_events.last().unwrap().block_number;
+
+                println!(
+                    "✅ Processed {} new events (now at block {})\n",
+                    new_events.len(),
+                    last_checked_block
+                );
+            } else {
+                tracing::debug!("No new events at block {}", last_checked_block);
+            }
+        }
     }
 }
 

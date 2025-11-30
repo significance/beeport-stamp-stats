@@ -103,7 +103,36 @@ beeport-stamp-stats summary --batch-id 0x1234
 beeport-stamp-stats summary --event-type batch-top-up --batch-id 0xabcd
 ```
 
-#### 3. Export Data
+#### 3. Follow Mode (Real-time)
+
+Watch the blockchain for new postage stamp events in real-time:
+
+```bash
+# Follow with default 12s polling
+beeport-stamp-stats follow
+
+# Custom poll interval (in seconds)
+beeport-stamp-stats follow --poll-interval 5
+
+# Follow without displaying events (hooks only)
+beeport-stamp-stats follow --display=false
+```
+
+**How it works:**
+1. First ensures historical sync (fetches any missed events)
+2. Then polls blockchain every N seconds for new events
+3. Invokes event hooks for each new event
+4. Caches and optionally displays new events
+5. Runs indefinitely until Ctrl+C
+
+**Event Hooks:**
+The follow mode includes a hook system that triggers on each new event. Currently implements a stub hook for demonstration, but can be extended to:
+- Send notifications (email, Slack, Discord)
+- Trigger webhooks
+- Update external databases
+- Execute custom logic
+
+#### 4. Export Data
 
 Export cached data to CSV or JSON for further analysis:
 
@@ -186,6 +215,15 @@ beeport-stamp-stats export \
   --output topups-report.json \
   --event-type batch-top-up \
   --months 6
+```
+
+**Monitor blockchain in real-time:**
+```bash
+# Start following for new events
+beeport-stamp-stats follow
+
+# Follow with custom interval
+beeport-stamp-stats follow --poll-interval 6
 ```
 
 ## Output Examples

@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 // https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293
 pub const POSTAGE_STAMP_ADDRESS: &str = "0x45a1502382541Cd610CC9068e88727426b696293";
 
+// Default starting block for fetching events (contract deployment block)
+// This is around Nov 2024 when the contract was deployed
+pub const DEFAULT_START_BLOCK: u64 = 37_000_000;
+
 // Solidity contract definition using alloy's sol! macro
 sol! {
     #[allow(missing_docs)]
