@@ -5,6 +5,7 @@ mod events;
 mod batch;
 mod display;
 mod error;
+mod export;
 
 use anyhow::Result;
 use clap::Parser;

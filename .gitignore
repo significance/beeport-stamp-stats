@@ -8,6 +8,11 @@ Cargo.lock
 *.db-wal
 stamp-cache.db
 
+# Exported data files
+*.csv
+*.json
+!Cargo.json
+
 # IDE
 .vscode/
 .idea/

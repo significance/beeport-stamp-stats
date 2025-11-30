@@ -17,7 +17,12 @@ This tool provides real-time tracking and historical analysis of postage stamp b
 - **SQLite Caching**: Persistent local database for fast historical queries
 - **Beautiful Output**: Markdown-formatted tables for easy reading
 - **Incremental Sync**: Fetch only new events since last run
-- **Comprehensive Testing**: 18 unit tests with 100% coverage of core functionality
+- **Advanced Filtering**: Filter events by type and batch ID (partial match support)
+- **Data Export**: Export to CSV or JSON for external analysis
+  - Export events, batches, or aggregated statistics
+  - Apply filters during export
+  - Time-range selection
+- **Comprehensive Testing**: 24 unit tests with 100% coverage of core functionality
 
 ### Technology Stack
 - **Rust 2024 Edition** - Latest Rust features and idioms
@@ -70,7 +75,7 @@ beeport-stamp-stats --rpc-url https://rpc.gnosischain.com fetch
 
 #### 2. Summary Statistics
 
-Display analytics from cached data:
+Display analytics from cached data with optional filtering:
 
 ```bash
 # View summary grouped by week (last 12 months)
@@ -87,6 +92,50 @@ beeport-stamp-stats summary --months 0
 
 # Last 6 months
 beeport-stamp-stats summary --months 6
+
+# Filter by event type (only show BatchCreated events)
+beeport-stamp-stats summary --event-type batch-created
+
+# Filter by specific batch ID (partial match)
+beeport-stamp-stats summary --batch-id 0x1234
+
+# Combine filters - BatchTopUp events for specific batch
+beeport-stamp-stats summary --event-type batch-top-up --batch-id 0xabcd
+```
+
+#### 3. Export Data
+
+Export cached data to CSV or JSON for further analysis:
+
+```bash
+# Export all events to JSON
+beeport-stamp-stats export --output events.json
+
+# Export events to CSV
+beeport-stamp-stats export --output events.csv --format csv
+
+# Export only batches
+beeport-stamp-stats export --data-type batches --output batches.json
+
+# Export period statistics
+beeport-stamp-stats export --data-type stats --output stats.csv --format csv
+
+# Export events from last 6 months only
+beeport-stamp-stats export --output recent.json --months 6
+
+# Export only BatchCreated events
+beeport-stamp-stats export --output created.csv --format csv --event-type batch-created
+
+# Export events for specific batch
+beeport-stamp-stats export --output batch-history.json --batch-id 0x1234
+
+# Complex filter - BatchTopUp events from last 3 months for specific batch
+beeport-stamp-stats export \
+  --output topups.csv \
+  --format csv \
+  --event-type batch-top-up \
+  --batch-id 0xabcd \
+  --months 3
 ```
 
 ### Environment Variables
@@ -114,6 +163,29 @@ beeport-stamp-stats fetch --incremental
 **View recent activity by week:**
 ```bash
 beeport-stamp-stats summary --group-by week --months 3
+```
+
+**Analyze only batch creation events:**
+```bash
+beeport-stamp-stats summary --event-type batch-created --group-by month
+```
+
+**Track a specific batch:**
+```bash
+beeport-stamp-stats summary --batch-id 0xabcd1234
+```
+
+**Export all data for external analysis:**
+```bash
+beeport-stamp-stats export --output all-events.csv --format csv
+```
+
+**Create a report of batch top-ups:**
+```bash
+beeport-stamp-stats export \
+  --output topups-report.json \
+  --event-type batch-top-up \
+  --months 6
 ```
 
 ## Output Examples
@@ -169,6 +241,39 @@ beeport-stamp-stats summary --group-by week --months 3
 |-------------|-------------|-------|--------------|-----------|------------------|
 | 0x1234...ef | 0xabcd...89 | 20    | 16           | No        | 2025-11-28 14:30 |
 ...
+```
+
+### Export Formats
+
+**CSV Export (events.csv):**
+```csv
+block_number,timestamp,event_type,batch_id,transaction_hash,log_index,details
+30123456,2025-01-15T14:30:00+00:00,BatchCreated,0x1234...ef,0xabcd...89,0,"{""type"":""BatchCreated"",""total_amount"":""1000000""...}"
+30123789,2025-01-15T15:45:00+00:00,BatchTopUp,0x1234...ef,0xabcd...90,0,"{""type"":""BatchTopUp"",""topup_amount"":""500000""...}"
+```
+
+**JSON Export (events.json):**
+```json
+[
+  {
+    "event_type": "BatchCreated",
+    "batch_id": "0x1234...ef",
+    "block_number": 30123456,
+    "block_timestamp": "2025-01-15T14:30:00+00:00",
+    "transaction_hash": "0xabcd...89",
+    "log_index": 0,
+    "data": {
+      "type": "BatchCreated",
+      "total_amount": "1000000000000000000",
+      "normalised_balance": "500000000000000000",
+      "owner": "0x5678",
+      "depth": 20,
+      "bucket_depth": 16,
+      "immutable_flag": false,
+      "normalised_balance_per_chunk": "1000"
+    }
+  }
+]
 ```
 
 ## Contract Information

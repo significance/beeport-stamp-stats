@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::{cache::Cache, blockchain::BlockchainClient, display};
+use crate::{batch, cache::Cache, blockchain::BlockchainClient, display, export, events::EventType};
 
 /// Beeport Postage Stamp Statistics Tool
 ///
@@ -49,6 +49,41 @@ pub enum Commands {
         /// Number of months to look back (0 for all time)
         #[arg(long, default_value = "12")]
         months: u32,
+
+        /// Filter by event type
+        #[arg(long)]
+        event_type: Option<FilterEventType>,
+
+        /// Filter by batch ID (partial match supported)
+        #[arg(long)]
+        batch_id: Option<String>,
+    },
+
+    /// Export cached data to CSV or JSON
+    Export {
+        /// What to export
+        #[arg(long, default_value = "events")]
+        data_type: ExportDataType,
+
+        /// Output file path
+        #[arg(long)]
+        output: PathBuf,
+
+        /// Export format
+        #[arg(long, default_value = "json")]
+        format: ExportFormat,
+
+        /// Number of months to export (0 for all time)
+        #[arg(long, default_value = "0")]
+        months: u32,
+
+        /// Filter by event type (for events export)
+        #[arg(long)]
+        event_type: Option<FilterEventType>,
+
+        /// Filter by batch ID (partial match supported)
+        #[arg(long)]
+        batch_id: Option<String>,
     },
 }
 
@@ -57,6 +92,46 @@ pub enum GroupBy {
     Day,
     Week,
     Month,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum FilterEventType {
+    BatchCreated,
+    BatchTopUp,
+    BatchDepthIncrease,
+}
+
+impl FilterEventType {
+    fn matches(&self, event_type: &EventType) -> bool {
+        matches!(
+            (self, event_type),
+            (FilterEventType::BatchCreated, EventType::BatchCreated)
+                | (FilterEventType::BatchTopUp, EventType::BatchTopUp)
+                | (FilterEventType::BatchDepthIncrease, EventType::BatchDepthIncrease)
+        )
+    }
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum ExportDataType {
+    Events,
+    Batches,
+    Stats,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum ExportFormat {
+    Csv,
+    Json,
+}
+
+impl From<ExportFormat> for export::ExportFormat {
+    fn from(format: ExportFormat) -> Self {
+        match format {
+            ExportFormat::Csv => export::ExportFormat::Csv,
+            ExportFormat::Json => export::ExportFormat::Json,
+        }
+    }
 }
 
 impl Cli {
@@ -68,8 +143,11 @@ impl Cli {
             Commands::Fetch { from_block, to_block, incremental } => {
                 self.execute_fetch(cache, *from_block, *to_block, *incremental).await
             }
-            Commands::Summary { group_by, months } => {
-                self.execute_summary(cache, group_by.clone(), *months).await
+            Commands::Summary { group_by, months, event_type, batch_id } => {
+                self.execute_summary(cache, group_by.clone(), *months, event_type.clone(), batch_id.clone()).await
+            }
+            Commands::Export { data_type, output, format, months, event_type, batch_id } => {
+                self.execute_export(cache, data_type.clone(), output, format.clone(), *months, event_type.clone(), batch_id.clone()).await
             }
         }
     }
@@ -125,17 +203,100 @@ impl Cli {
         cache: Cache,
         group_by: GroupBy,
         months: u32,
+        event_type_filter: Option<FilterEventType>,
+        batch_id_filter: Option<String>,
     ) -> Result<()> {
         tracing::info!("Generating summary from cached data...");
 
         // Retrieve events from cache
-        let events = cache.get_events(months).await?;
-        let batches = cache.get_batches(months).await?;
+        let mut events = cache.get_events(months).await?;
+        let mut batches = cache.get_batches(months).await?;
+
+        // Apply filters
+        if let Some(ref filter) = event_type_filter {
+            let before = events.len();
+            events.retain(|e| filter.matches(&e.event_type));
+            tracing::info!("Event type filter: {} -> {} events", before, events.len());
+        }
+
+        if let Some(ref filter) = batch_id_filter {
+            let before = events.len();
+            events.retain(|e| e.batch_id.contains(filter));
+            tracing::info!("Batch ID filter: {} -> {} events", before, events.len());
+
+            batches.retain(|b| b.batch_id.contains(filter));
+        }
 
         tracing::info!("Loaded {} events and {} batches from cache", events.len(), batches.len());
 
         // Display summary
         display::display_summary(&events, &batches, group_by)?;
+
+        Ok(())
+    }
+
+    async fn execute_export(
+        &self,
+        cache: Cache,
+        data_type: ExportDataType,
+        output: &PathBuf,
+        format: ExportFormat,
+        months: u32,
+        event_type_filter: Option<FilterEventType>,
+        batch_id_filter: Option<String>,
+    ) -> Result<()> {
+        tracing::info!("Exporting data to {:?}...", output);
+
+        let export_format = format.into();
+
+        match data_type {
+            ExportDataType::Events => {
+                let mut events = cache.get_events(months).await?;
+
+                // Apply filters
+                if let Some(ref filter) = event_type_filter {
+                    events.retain(|e| filter.matches(&e.event_type));
+                }
+
+                if let Some(ref filter) = batch_id_filter {
+                    events.retain(|e| e.batch_id.contains(filter));
+                }
+
+                tracing::info!("Exporting {} events", events.len());
+                export::export_events(&events, output, export_format)?;
+            }
+            ExportDataType::Batches => {
+                let mut batches = cache.get_batches(months).await?;
+
+                // Apply batch ID filter
+                if let Some(ref filter) = batch_id_filter {
+                    batches.retain(|b| b.batch_id.contains(filter));
+                }
+
+                tracing::info!("Exporting {} batches", batches.len());
+                export::export_batches(&batches, output, export_format)?;
+            }
+            ExportDataType::Stats => {
+                let mut events = cache.get_events(months).await?;
+
+                // Apply filters
+                if let Some(ref filter) = event_type_filter {
+                    events.retain(|e| filter.matches(&e.event_type));
+                }
+
+                if let Some(ref filter) = batch_id_filter {
+                    events.retain(|e| e.batch_id.contains(filter));
+                }
+
+                // Group by week for stats export (could be made configurable)
+                let stats = batch::aggregate_events(&events, &GroupBy::Week);
+
+                tracing::info!("Exporting {} period statistics", stats.len());
+                export::export_stats(&stats, output, export_format)?;
+            }
+        }
+
+        println!("✅ Exported to: {}", output.display());
 
         Ok(())
     }
