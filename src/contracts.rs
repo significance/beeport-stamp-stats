@@ -181,7 +181,7 @@ sol! {
                     "type": "uint256"
                 },
                 {
-                    "indexed": false,
+                    "indexed": true,
                     "internalType": "address",
                     "name": "owner",
                     "type": "address"
