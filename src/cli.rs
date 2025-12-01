@@ -275,7 +275,7 @@ impl Cli {
         );
 
         // Fetch and display events
-        let events = client.fetch_batch_events(from, to).await?;
+        let events = client.fetch_batch_events(from, to, &cache).await?;
 
         tracing::info!("Found {} events", events.len());
 
@@ -441,7 +441,7 @@ impl Cli {
 
         // Fetch all events up to current block
         let latest_block = client
-            .fetch_batch_events(last_synced_block + 1, u64::MAX)
+            .fetch_batch_events(last_synced_block + 1, u64::MAX, &cache)
             .await?;
         let current_latest = if !latest_block.is_empty() {
             latest_block.last().unwrap().block_number
@@ -484,7 +484,7 @@ impl Cli {
 
             // Fetch new events since last check
             let new_events = client
-                .fetch_batch_events(last_checked_block + 1, u64::MAX)
+                .fetch_batch_events(last_checked_block + 1, u64::MAX, &cache)
                 .await?;
 
             if !new_events.is_empty() {

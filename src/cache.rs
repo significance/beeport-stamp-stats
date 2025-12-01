@@ -45,6 +45,21 @@ impl Cache {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS rpc_cache (
+                chunk_hash TEXT PRIMARY KEY,
+                contract_address TEXT NOT NULL,
+                from_block INTEGER NOT NULL,
+                to_block INTEGER NOT NULL,
+                processed_at INTEGER NOT NULL,
+                event_count INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS batches (
                 batch_id TEXT PRIMARY KEY,
                 owner TEXT NOT NULL,
@@ -75,6 +90,12 @@ impl Cache {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract ON events(contract_source)")
             .execute(&self.pool)
             .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_rpc_cache_blocks ON rpc_cache(contract_address, from_block, to_block)",
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }
@@ -256,6 +277,62 @@ impl Cache {
             .fetch_one(&self.pool)
             .await?;
         Ok(row.get("count"))
+    }
+
+    /// Check if an RPC chunk has been cached
+    pub async fn is_chunk_cached(&self, chunk_hash: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM rpc_cache WHERE chunk_hash = ?")
+            .bind(chunk_hash)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let count: i64 = row.get("count");
+        Ok(count > 0)
+    }
+
+    /// Store RPC chunk metadata in cache
+    pub async fn cache_chunk(
+        &self,
+        chunk_hash: &str,
+        contract_address: &str,
+        from_block: u64,
+        to_block: u64,
+        event_count: usize,
+    ) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO rpc_cache
+            (chunk_hash, contract_address, from_block, to_block, processed_at, event_count)
+            VALUES (?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(chunk_hash)
+        .bind(contract_address)
+        .bind(from_block as i64)
+        .bind(to_block as i64)
+        .bind(now)
+        .bind(event_count as i64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get statistics about RPC cache
+    #[allow(dead_code)]
+    pub async fn get_cache_stats(&self) -> Result<(i64, i64)> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as chunk_count, COALESCE(SUM(event_count), 0) as total_events FROM rpc_cache",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let chunk_count: i64 = row.get("chunk_count");
+        let total_events: i64 = row.get("total_events");
+
+        Ok((chunk_count, total_events))
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::cache::Cache;
 use crate::contracts::{ContractType, PostageStamp, StampsRegistry};
 use crate::error::{Result, StampError};
 use crate::events::{BatchInfo, EventData, EventType, StampEvent};
@@ -7,6 +8,7 @@ use alloy::rpc::types::{BlockTransactionsKind, Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
 use chrono::{DateTime, Utc};
+use sha2::{Digest, Sha256};
 use std::str::FromStr;
 
 pub struct BlockchainClient {
@@ -30,13 +32,14 @@ impl BlockchainClient {
         &self,
         from_block: u64,
         to_block: u64,
+        cache: &Cache,
     ) -> Result<Vec<StampEvent>> {
         let mut all_events = Vec::new();
 
         // Fetch events from each contract
         for contract_type in ContractType::all() {
             let events = self
-                .fetch_contract_events(contract_type, from_block, to_block)
+                .fetch_contract_events(contract_type, from_block, to_block, cache)
                 .await?;
             all_events.extend(events);
         }
@@ -51,12 +54,23 @@ impl BlockchainClient {
         Ok(all_events)
     }
 
+    /// Generate a cache key for a chunk request
+    fn generate_chunk_hash(contract_address: &str, from_block: u64, to_block: u64) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(contract_address.as_bytes());
+        hasher.update(from_block.to_le_bytes());
+        hasher.update(to_block.to_le_bytes());
+        let result = hasher.finalize();
+        format!("{:x}", result)
+    }
+
     /// Fetch events from a specific contract
     async fn fetch_contract_events(
         &self,
         contract_type: ContractType,
         from_block: u64,
         to_block: u64,
+        cache: &Cache,
     ) -> Result<Vec<StampEvent>> {
         let contract_address = Address::from_str(contract_type.address())
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
@@ -92,6 +106,24 @@ impl BlockchainClient {
             let current_to = std::cmp::min(current_from + CHUNK_SIZE - 1, to_block);
             chunk_num += 1;
 
+            // Generate cache hash for this chunk
+            let chunk_hash =
+                Self::generate_chunk_hash(contract_type.address(), current_from, current_to);
+
+            // Check if chunk is already cached
+            if cache.is_chunk_cached(&chunk_hash).await? {
+                tracing::info!(
+                    "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
+                    contract_type.name(),
+                    chunk_num,
+                    total_chunks,
+                    current_from,
+                    current_to
+                );
+                current_from = current_to + 1;
+                continue;
+            }
+
             tracing::info!(
                 "  {} - Chunk {}/{}: blocks {} to {}",
                 contract_type.name(),
@@ -122,11 +154,24 @@ impl BlockchainClient {
             }
 
             // Parse each log
+            let chunk_event_count = events.len();
             for log in logs {
                 if let Some(event) = self.parse_log(contract_type, log).await? {
                     events.push(event);
                 }
             }
+            let parsed_events = events.len() - chunk_event_count;
+
+            // Cache this chunk
+            cache
+                .cache_chunk(
+                    &chunk_hash,
+                    contract_type.address(),
+                    current_from,
+                    current_to,
+                    parsed_events,
+                )
+                .await?;
 
             current_from = current_to + 1;
         }
