@@ -1,122 +1,8 @@
-use alloy::sol;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// PostageStamp contract address on Gnosis Chain (from ethersphere/storage-incentives mainnet_deployed.json)
-// https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293
-pub const POSTAGE_STAMP_ADDRESS: &str = "0x45a1502382541Cd610CC9068e88727426b696293";
-
-// Default starting block for fetching events (contract deployment block)
-// This is around Nov 2024 when the contract was deployed
-pub const DEFAULT_START_BLOCK: u64 = 37_000_000;
-
-// Solidity contract definition using alloy's sol! macro
-sol! {
-    #[allow(missing_docs)]
-    #[sol(rpc)]
-    PostageStamp,
-    r#"[
-        {
-            "anonymous": false,
-            "inputs": [
-                {
-                    "indexed": true,
-                    "internalType": "bytes32",
-                    "name": "batchId",
-                    "type": "bytes32"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "totalAmount",
-                    "type": "uint256"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "normalisedBalance",
-                    "type": "uint256"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "address",
-                    "name": "owner",
-                    "type": "address"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint8",
-                    "name": "depth",
-                    "type": "uint8"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint8",
-                    "name": "bucketDepth",
-                    "type": "uint8"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "bool",
-                    "name": "immutableFlag",
-                    "type": "bool"
-                }
-            ],
-            "name": "BatchCreated",
-            "type": "event"
-        },
-        {
-            "anonymous": false,
-            "inputs": [
-                {
-                    "indexed": true,
-                    "internalType": "bytes32",
-                    "name": "batchId",
-                    "type": "bytes32"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "topupAmount",
-                    "type": "uint256"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "normalisedBalance",
-                    "type": "uint256"
-                }
-            ],
-            "name": "BatchTopUp",
-            "type": "event"
-        },
-        {
-            "anonymous": false,
-            "inputs": [
-                {
-                    "indexed": true,
-                    "internalType": "bytes32",
-                    "name": "batchId",
-                    "type": "bytes32"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint8",
-                    "name": "newDepth",
-                    "type": "uint8"
-                },
-                {
-                    "indexed": false,
-                    "internalType": "uint256",
-                    "name": "normalisedBalance",
-                    "type": "uint256"
-                }
-            ],
-            "name": "BatchDepthIncrease",
-            "type": "event"
-        }
-    ]"#
-}
+// Re-export from contracts module
+pub use crate::contracts::DEFAULT_START_BLOCK;
 
 /// Unified event type that can represent any PostageStamp event
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +13,7 @@ pub struct StampEvent {
     pub block_timestamp: DateTime<Utc>,
     pub transaction_hash: String,
     pub log_index: u64,
+    pub contract_source: String, // Which contract emitted this event
     pub data: EventData,
 }
 
@@ -157,14 +44,17 @@ pub enum EventData {
         depth: u8,
         bucket_depth: u8,
         immutable_flag: bool,
+        payer: Option<String>, // Only present in StampsRegistry events
     },
     BatchTopUp {
         topup_amount: String,
         normalised_balance: String,
+        payer: Option<String>, // Only present in StampsRegistry events
     },
     BatchDepthIncrease {
         new_depth: u8,
         normalised_balance: String,
+        payer: Option<String>, // Only present in StampsRegistry events
     },
 }
 
@@ -203,6 +93,7 @@ mod tests {
             block_timestamp: Utc::now(),
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
+            contract_source: "PostageStamp".to_string(),
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -210,6 +101,7 @@ mod tests {
                 depth: 20,
                 bucket_depth: 16,
                 immutable_flag: false,
+                payer: None,
             },
         };
 
@@ -221,9 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn test_postage_stamp_address() {
-        // Verify the address is valid
-        assert!(!POSTAGE_STAMP_ADDRESS.is_empty());
-        assert!(POSTAGE_STAMP_ADDRESS.starts_with("0x"));
+    fn test_default_start_block() {
+        // Verify the default start block is set
+        assert!(DEFAULT_START_BLOCK > 0);
     }
 }

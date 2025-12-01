@@ -168,6 +168,7 @@ mod tests {
             block_timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
+            contract_source: "PostageStamp".to_string(),
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -175,6 +176,7 @@ mod tests {
                 depth: 20,
                 bucket_depth: 16,
                 immutable_flag: false,
+                payer: None,
             },
         }];
 
@@ -195,6 +197,7 @@ mod tests {
             block_timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
+            contract_source: "PostageStamp".to_string(),
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -202,6 +205,7 @@ mod tests {
                 depth: 20,
                 bucket_depth: 16,
                 immutable_flag: false,
+                payer: None,
             },
         }];
 

@@ -1,0 +1,300 @@
+use alloy::sol;
+
+/// Identifier for different contract types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContractType {
+    PostageStamp,
+    StampsRegistry,
+}
+
+impl ContractType {
+    pub fn address(&self) -> &'static str {
+        match self {
+            ContractType::PostageStamp => POSTAGE_STAMP_ADDRESS,
+            ContractType::StampsRegistry => STAMPS_REGISTRY_ADDRESS,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            ContractType::PostageStamp => "PostageStamp",
+            ContractType::StampsRegistry => "StampsRegistry",
+        }
+    }
+
+    pub fn all() -> Vec<ContractType> {
+        vec![ContractType::PostageStamp, ContractType::StampsRegistry]
+    }
+}
+
+impl std::fmt::Display for ContractType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+// PostageStamp contract address on Gnosis Chain
+// https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293
+pub const POSTAGE_STAMP_ADDRESS: &str = "0x45a1502382541Cd610CC9068e88727426b696293";
+
+// StampsRegistry contract address on Gnosis Chain
+// https://gnosisscan.io/address/0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3
+pub const STAMPS_REGISTRY_ADDRESS: &str = "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3";
+
+// Default starting block for fetching events (contract deployment block)
+// This is around Nov 2024 when the contracts were deployed
+pub const DEFAULT_START_BLOCK: u64 = 37_000_000;
+
+// Solidity contract definition for PostageStamp using alloy's sol! macro
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    PostageStamp,
+    r#"[
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "totalAmount",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "address",
+                    "name": "owner",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "depth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "bucketDepth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "bool",
+                    "name": "immutableFlag",
+                    "type": "bool"
+                }
+            ],
+            "name": "BatchCreated",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "topupAmount",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                }
+            ],
+            "name": "BatchTopUp",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "newDepth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                }
+            ],
+            "name": "BatchDepthIncrease",
+            "type": "event"
+        }
+    ]"#
+}
+
+// Solidity contract definition for StampsRegistry using alloy's sol! macro
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    StampsRegistry,
+    r#"[
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "totalAmount",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "address",
+                    "name": "owner",
+                    "type": "address"
+                },
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "payer",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "depth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "bucketDepth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "bool",
+                    "name": "immutableFlag",
+                    "type": "bool"
+                }
+            ],
+            "name": "BatchCreated",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "topupAmount",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "payer",
+                    "type": "address"
+                }
+            ],
+            "name": "BatchTopUp",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "batchId",
+                    "type": "bytes32"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint8",
+                    "name": "newDepth",
+                    "type": "uint8"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "normalisedBalance",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "payer",
+                    "type": "address"
+                }
+            ],
+            "name": "BatchDepthIncrease",
+            "type": "event"
+        }
+    ]"#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contract_type_all() {
+        let contracts = ContractType::all();
+        assert_eq!(contracts.len(), 2);
+        assert!(contracts.contains(&ContractType::PostageStamp));
+        assert!(contracts.contains(&ContractType::StampsRegistry));
+    }
+
+    #[test]
+    fn test_contract_addresses() {
+        assert!(POSTAGE_STAMP_ADDRESS.starts_with("0x"));
+        assert!(STAMPS_REGISTRY_ADDRESS.starts_with("0x"));
+        assert_ne!(POSTAGE_STAMP_ADDRESS, STAMPS_REGISTRY_ADDRESS);
+    }
+}

@@ -10,19 +10,24 @@ This tool provides real-time tracking and historical analysis of postage stamp b
 
 ### Core Capabilities
 - **Direct RPC Access**: Uses Ethereum RPC directly instead of third-party APIs for reliable, rate-limit-free access
+- **Multi-Contract Support**: Monitor multiple contracts simultaneously
+  - PostageStamp contract (direct stamp purchases)
+  - StampsRegistry contract (UI-based stamp purchases)
+  - Easy to extend with additional contracts
 - **Event Tracking**: Monitors all PostageStamp contract events:
   - `BatchCreated` - New postage batch creation
   - `BatchTopUp` - Batch balance increases
   - `BatchDepthIncrease` - Batch storage depth expansions
+- **Contract-Specific Hooks**: Generic hook system for custom event handling per contract
 - **SQLite Caching**: Persistent local database for fast historical queries
 - **Beautiful Output**: Markdown-formatted tables for easy reading
 - **Incremental Sync**: Fetch only new events since last run
-- **Advanced Filtering**: Filter events by type and batch ID (partial match support)
+- **Advanced Filtering**: Filter events by type, batch ID, and contract source
 - **Data Export**: Export to CSV or JSON for external analysis
   - Export events, batches, or aggregated statistics
   - Apply filters during export
   - Time-range selection
-- **Comprehensive Testing**: 24 unit tests with 100% coverage of core functionality
+- **Comprehensive Testing**: 28 unit tests with 100% coverage of core functionality
 
 ### Technology Stack
 - **Rust 2024 Edition** - Latest Rust features and idioms
@@ -99,8 +104,12 @@ beeport-stamp-stats summary --event-type batch-created
 # Filter by specific batch ID (partial match)
 beeport-stamp-stats summary --batch-id 0x1234
 
-# Combine filters - BatchTopUp events for specific batch
-beeport-stamp-stats summary --event-type batch-top-up --batch-id 0xabcd
+# Filter by contract source
+beeport-stamp-stats summary --contract postage-stamp
+beeport-stamp-stats summary --contract stamps-registry
+
+# Combine filters - BatchTopUp events for specific batch from PostageStamp
+beeport-stamp-stats summary --event-type batch-top-up --batch-id 0xabcd --contract postage-stamp
 ```
 
 #### 3. Follow Mode (Real-time)
@@ -126,11 +135,17 @@ beeport-stamp-stats follow --display=false
 5. Runs indefinitely until Ctrl+C
 
 **Event Hooks:**
-The follow mode includes a hook system that triggers on each new event. Currently implements a stub hook for demonstration, but can be extended to:
+The follow mode includes a generic hook system that triggers on each new event with contract-specific handlers:
+- `on_event()` - Called for all events
+- `on_postage_stamp_event()` - Called for PostageStamp contract events
+- `on_stamps_registry_event()` - Called for StampsRegistry contract events
+
+Currently implements a stub hook for demonstration, but can be extended to:
 - Send notifications (email, Slack, Discord)
 - Trigger webhooks
 - Update external databases
-- Execute custom logic
+- Execute contract-specific custom logic
+- Route events to different systems based on contract source
 
 #### 4. Export Data
 
@@ -158,12 +173,16 @@ beeport-stamp-stats export --output created.csv --format csv --event-type batch-
 # Export events for specific batch
 beeport-stamp-stats export --output batch-history.json --batch-id 0x1234
 
-# Complex filter - BatchTopUp events from last 3 months for specific batch
+# Export events from specific contract
+beeport-stamp-stats export --output stamps-registry-events.json --contract stamps-registry
+
+# Complex filter - BatchTopUp events from PostageStamp contract, last 3 months, specific batch
 beeport-stamp-stats export \
   --output topups.csv \
   --format csv \
   --event-type batch-top-up \
   --batch-id 0xabcd \
+  --contract postage-stamp \
   --months 3
 ```
 
@@ -315,11 +334,259 @@ block_number,timestamp,event_type,batch_id,transaction_hash,log_index,details
 
 ## Contract Information
 
+### PostageStamp Contract
 - **Network:** Gnosis Chain
-- **Contract Address:** `0x6a1A21eca3aB28BE85C7Ba22b2d6eAe5907c9008`
-- **Contract Type:** PostageStamp (Swarm Storage)
-- **Deployment Block:** 19,275,989
-- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x6a1A21eca3aB28BE85C7Ba22b2d6eAe5907c9008)
+- **Contract Address:** `0x45a1502382541Cd610CC9068e88727426b696293`
+- **Contract Type:** PostageStamp (Direct stamp purchases)
+- **Deployment Block:** ~37,000,000
+- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293)
+
+### StampsRegistry Contract
+- **Network:** Gnosis Chain
+- **Contract Address:** `0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3`
+- **Contract Type:** StampsRegistry (UI-based stamp purchases with payer tracking)
+- **Deployment Block:** ~37,000,000
+- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3)
+
+## Extending with New Contracts
+
+The system is designed to be easily extensible. Here's how to add support for a new contract:
+
+### Step 1: Add Contract Definition
+
+In `src/contracts.rs`, add your contract to the `ContractType` enum:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContractType {
+    PostageStamp,
+    StampsRegistry,
+    YourNewContract,  // Add your contract here
+}
+```
+
+Add the contract address constant:
+
+```rust
+// Your contract address on Gnosis Chain
+pub const YOUR_CONTRACT_ADDRESS: &str = "0x...";
+```
+
+Update the `ContractType` implementation:
+
+```rust
+impl ContractType {
+    pub fn address(&self) -> &'static str {
+        match self {
+            ContractType::PostageStamp => POSTAGE_STAMP_ADDRESS,
+            ContractType::StampsRegistry => STAMPS_REGISTRY_ADDRESS,
+            ContractType::YourNewContract => YOUR_CONTRACT_ADDRESS,  // Add here
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            ContractType::PostageStamp => "PostageStamp",
+            ContractType::StampsRegistry => "StampsRegistry",
+            ContractType::YourNewContract => "YourContract",  // Add here
+        }
+    }
+
+    pub fn all() -> Vec<ContractType> {
+        vec![
+            ContractType::PostageStamp,
+            ContractType::StampsRegistry,
+            ContractType::YourNewContract,  // Add here
+        ]
+    }
+}
+```
+
+Define the contract ABI using Alloy's `sol!` macro:
+
+```rust
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    YourContract,
+    r#"[
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "bytes32",
+                    "name": "eventField",
+                    "type": "bytes32"
+                }
+            ],
+            "name": "YourEvent",
+            "type": "event"
+        }
+    ]"#
+}
+```
+
+### Step 2: Add Event Parser
+
+In `src/blockchain.rs`, add a parser method for your contract's events:
+
+```rust
+/// Parse YourContract events
+fn parse_your_contract_log(
+    &self,
+    log: Log,
+    block_number: u64,
+    block_timestamp: DateTime<Utc>,
+    transaction_hash: alloy::primitives::TxHash,
+    log_index: u64,
+    contract_source: String,
+) -> Result<Option<StampEvent>> {
+    // Try to parse as YourEvent
+    if let Ok(event) = YourContract::YourEvent::decode_log(&log.inner, true) {
+        return Ok(Some(StampEvent {
+            event_type: EventType::BatchCreated,  // Or your event type
+            batch_id: format!("{:?}", event.eventField),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{:?}", transaction_hash),
+            log_index,
+            contract_source,
+            data: EventData::BatchCreated {  // Map to appropriate EventData
+                // ... populate fields from event
+            },
+        }));
+    }
+
+    Ok(None)
+}
+```
+
+Update the `parse_log` method to route to your parser:
+
+```rust
+match contract_type {
+    ContractType::PostageStamp => self.parse_postage_stamp_log(...),
+    ContractType::StampsRegistry => self.parse_stamps_registry_log(...),
+    ContractType::YourNewContract => self.parse_your_contract_log(...),  // Add here
+}
+```
+
+### Step 3: Add Custom Event Hook (Optional)
+
+In `src/hooks.rs`, add a handler for your contract's events:
+
+```rust
+pub trait EventHook: Send + Sync {
+    fn on_event(&self, event: &StampEvent);
+    fn on_postage_stamp_event(&self, event: &StampEvent) { /* ... */ }
+    fn on_stamps_registry_event(&self, event: &StampEvent) { /* ... */ }
+
+    /// Called when a new event is detected from YourContract
+    fn on_your_contract_event(&self, event: &StampEvent) {
+        tracing::debug!(
+            "YourContract event: {} at block {}",
+            event.event_type,
+            event.block_number
+        );
+    }
+}
+```
+
+Update the `StubHook` implementation to route events:
+
+```rust
+impl EventHook for StubHook {
+    fn on_event(&self, event: &StampEvent) {
+        // Route to contract-specific handlers
+        match event.contract_source.as_str() {
+            "PostageStamp" => self.on_postage_stamp_event(event),
+            "StampsRegistry" => self.on_stamps_registry_event(event),
+            "YourContract" => self.on_your_contract_event(event),  // Add here
+            _ => tracing::warn!("Unknown contract source: {}", event.contract_source),
+        }
+    }
+
+    fn on_your_contract_event(&self, event: &StampEvent) {
+        tracing::info!(
+            "YourContract: {} event at block {}",
+            event.event_type,
+            event.block_number
+        );
+        // Add custom logic here:
+        // - Send webhook notifications
+        // - Update external systems
+        // - Trigger alerts
+        // - Custom business logic
+    }
+}
+```
+
+### Step 4: Add CLI Filter Option (Optional)
+
+In `src/cli.rs`, update the `FilterContract` enum:
+
+```rust
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum FilterContract {
+    PostageStamp,
+    StampsRegistry,
+    YourContract,  // Add here
+}
+
+impl FilterContract {
+    fn matches(&self, contract_source: &str) -> bool {
+        matches!(
+            (self, contract_source),
+            (FilterContract::PostageStamp, "PostageStamp")
+                | (FilterContract::StampsRegistry, "StampsRegistry")
+                | (FilterContract::YourContract, "YourContract")  // Add here
+        )
+    }
+}
+```
+
+### Step 5: Update Display (Optional)
+
+In `src/display.rs`, update the `truncate_contract_name` function:
+
+```rust
+fn truncate_contract_name(contract: &str) -> String {
+    match contract {
+        "PostageStamp" => "PostageStamp".to_string(),
+        "StampsRegistry" => "StampsReg".to_string(),
+        "YourContract" => "YourCont".to_string(),  // Add here
+        _ => contract.to_string(),
+    }
+}
+```
+
+### Step 6: Test Your Integration
+
+```bash
+# Run tests
+cargo test
+
+# Fetch events from your new contract
+cargo run --release -- fetch --from-block <start-block>
+
+# View summary with contract breakdown
+cargo run --release -- summary --months 0
+
+# Filter by your contract
+cargo run --release -- summary --contract your-contract
+
+# Follow mode (monitors all contracts including yours)
+cargo run --release -- follow
+```
+
+### Complete Example
+
+For a complete working example, see how `StampsRegistry` was added alongside `PostageStamp`:
+- Contract definition: `src/contracts.rs:39-235`
+- Event parser: `src/blockchain.rs:261-329`
+- Hook handler: `src/hooks.rs:61-70`
+- CLI filter: `src/cli.rs:142-156`
 
 ## Development
 
@@ -342,11 +609,14 @@ cargo test test_cache_creation
 src/
 ├── main.rs          # Entry point and async runtime setup
 ├── cli.rs           # Command-line interface and argument parsing
-├── blockchain.rs    # Ethereum RPC client and event fetching
+├── contracts.rs     # Contract definitions and ABIs
+├── blockchain.rs    # Multi-contract RPC client and event fetching
 ├── cache.rs         # SQLite database operations
-├── events.rs        # Event types and contract ABI
+├── events.rs        # Event types and data structures
+├── hooks.rs         # Generic event hook system with contract-specific handlers
 ├── batch.rs         # Batch aggregation and statistics
 ├── display.rs       # Markdown table formatting
+├── export.rs        # Data export functionality
 └── error.rs         # Error types and handling
 ```
 

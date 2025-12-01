@@ -2,6 +2,7 @@ mod batch;
 mod blockchain;
 mod cache;
 mod cli;
+mod contracts;
 mod display;
 mod error;
 mod events;

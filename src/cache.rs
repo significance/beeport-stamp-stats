@@ -34,6 +34,7 @@ impl Cache {
                 block_timestamp INTEGER NOT NULL,
                 transaction_hash TEXT NOT NULL,
                 log_index INTEGER NOT NULL,
+                contract_source TEXT NOT NULL DEFAULT 'PostageStamp',
                 data TEXT NOT NULL,
                 UNIQUE(transaction_hash, log_index)
             )
@@ -71,6 +72,10 @@ impl Cache {
             .execute(&self.pool)
             .await?;
 
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_events_contract ON events(contract_source)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -84,8 +89,8 @@ impl Cache {
             sqlx::query(
                 r#"
                 INSERT OR REPLACE INTO events
-                (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, data)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&event_type)
@@ -94,6 +99,7 @@ impl Cache {
             .bind(timestamp)
             .bind(&event.transaction_hash)
             .bind(event.log_index as i64)
+            .bind(&event.contract_source)
             .bind(&data)
             .execute(&self.pool)
             .await?;
@@ -151,7 +157,7 @@ impl Cache {
         let rows = sqlx::query(
             r#"
             SELECT event_type, batch_id, block_number, block_timestamp,
-                   transaction_hash, log_index, data
+                   transaction_hash, log_index, contract_source, data
             FROM events
             WHERE block_timestamp >= ?
             ORDER BY block_number ASC, log_index ASC
@@ -185,6 +191,7 @@ impl Cache {
                 block_timestamp,
                 transaction_hash: row.get("transaction_hash"),
                 log_index: row.get::<i64, _>("log_index") as u64,
+                contract_source: row.get("contract_source"),
                 data,
             });
         }
@@ -281,6 +288,7 @@ mod tests {
             block_timestamp: Utc::now(),
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
+            contract_source: "PostageStamp".to_string(),
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -288,6 +296,7 @@ mod tests {
                 depth: 20,
                 bucket_depth: 16,
                 immutable_flag: false,
+                payer: None,
             },
         }];
 
@@ -335,6 +344,7 @@ mod tests {
                 block_timestamp: Utc::now(),
                 transaction_hash: "0xabcd1".to_string(),
                 log_index: 0,
+                contract_source: "PostageStamp".to_string(),
                 data: EventData::BatchCreated {
                     total_amount: "1000000000000000000".to_string(),
                     normalised_balance: "500000000000000000".to_string(),
@@ -342,6 +352,7 @@ mod tests {
                     depth: 20,
                     bucket_depth: 16,
                     immutable_flag: false,
+                    payer: None,
                 },
             },
             StampEvent {
@@ -351,9 +362,11 @@ mod tests {
                 block_timestamp: Utc::now(),
                 transaction_hash: "0xabcd2".to_string(),
                 log_index: 0,
+                contract_source: "PostageStamp".to_string(),
                 data: EventData::BatchTopUp {
                     topup_amount: "100000000000000000".to_string(),
                     normalised_balance: "600000000000000000".to_string(),
+                    payer: None,
                 },
             },
         ];

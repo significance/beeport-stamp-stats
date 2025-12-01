@@ -3,8 +3,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use crate::{
-    batch, blockchain::BlockchainClient, cache::Cache, display,
-    events::{EventType, DEFAULT_START_BLOCK},
+    batch,
+    blockchain::BlockchainClient,
+    cache::Cache,
+    display,
+    events::{DEFAULT_START_BLOCK, EventType},
     export,
     hooks::{EventHook, StubHook},
 };
@@ -62,6 +65,10 @@ pub enum Commands {
         /// Filter by batch ID (partial match supported)
         #[arg(long)]
         batch_id: Option<String>,
+
+        /// Filter by contract source
+        #[arg(long)]
+        contract: Option<FilterContract>,
     },
 
     /// Export cached data to CSV or JSON
@@ -89,6 +96,10 @@ pub enum Commands {
         /// Filter by batch ID (partial match supported)
         #[arg(long)]
         batch_id: Option<String>,
+
+        /// Filter by contract source
+        #[arg(long)]
+        contract: Option<FilterContract>,
     },
 
     /// Follow blockchain for new events in real-time
@@ -127,6 +138,22 @@ impl FilterEventType {
                     FilterEventType::BatchDepthIncrease,
                     EventType::BatchDepthIncrease
                 )
+        )
+    }
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum FilterContract {
+    PostageStamp,
+    StampsRegistry,
+}
+
+impl FilterContract {
+    fn matches(&self, contract_source: &str) -> bool {
+        matches!(
+            (self, contract_source),
+            (FilterContract::PostageStamp, "PostageStamp")
+                | (FilterContract::StampsRegistry, "StampsRegistry")
         )
     }
 }
@@ -172,6 +199,7 @@ impl Cli {
                 months,
                 event_type,
                 batch_id,
+                contract,
             } => {
                 self.execute_summary(
                     cache,
@@ -179,6 +207,7 @@ impl Cli {
                     *months,
                     event_type.clone(),
                     batch_id.clone(),
+                    contract.clone(),
                 )
                 .await
             }
@@ -189,6 +218,7 @@ impl Cli {
                 months,
                 event_type,
                 batch_id,
+                contract,
             } => {
                 self.execute_export(
                     cache,
@@ -198,6 +228,7 @@ impl Cli {
                     *months,
                     event_type.clone(),
                     batch_id.clone(),
+                    contract.clone(),
                 )
                 .await
             }
@@ -274,6 +305,7 @@ impl Cli {
         months: u32,
         event_type_filter: Option<FilterEventType>,
         batch_id_filter: Option<String>,
+        contract_filter: Option<FilterContract>,
     ) -> Result<()> {
         tracing::info!("Generating summary from cached data...");
 
@@ -294,6 +326,12 @@ impl Cli {
             tracing::info!("Batch ID filter: {} -> {} events", before, events.len());
 
             batches.retain(|b| b.batch_id.contains(filter));
+        }
+
+        if let Some(ref filter) = contract_filter {
+            let before = events.len();
+            events.retain(|e| filter.matches(&e.contract_source));
+            tracing::info!("Contract filter: {} -> {} events", before, events.len());
         }
 
         tracing::info!(
@@ -317,6 +355,7 @@ impl Cli {
         months: u32,
         event_type_filter: Option<FilterEventType>,
         batch_id_filter: Option<String>,
+        contract_filter: Option<FilterContract>,
     ) -> Result<()> {
         tracing::info!("Exporting data to {:?}...", output);
 
@@ -333,6 +372,10 @@ impl Cli {
 
                 if let Some(ref filter) = batch_id_filter {
                     events.retain(|e| e.batch_id.contains(filter));
+                }
+
+                if let Some(ref filter) = contract_filter {
+                    events.retain(|e| filter.matches(&e.contract_source));
                 }
 
                 tracing::info!("Exporting {} events", events.len());
@@ -361,6 +404,10 @@ impl Cli {
                     events.retain(|e| e.batch_id.contains(filter));
                 }
 
+                if let Some(ref filter) = contract_filter {
+                    events.retain(|e| filter.matches(&e.contract_source));
+                }
+
                 // Group by week for stats export (could be made configurable)
                 let stats = batch::aggregate_events(&events, &GroupBy::Week);
 
@@ -374,13 +421,8 @@ impl Cli {
         Ok(())
     }
 
-    async fn execute_follow(
-        &self,
-        cache: Cache,
-        poll_interval: u64,
-        display: bool,
-    ) -> Result<()> {
-        use tokio::time::{interval, Duration};
+    async fn execute_follow(&self, cache: Cache, poll_interval: u64, display: bool) -> Result<()> {
+        use tokio::time::{Duration, interval};
 
         tracing::info!("Starting follow mode with {}s poll interval", poll_interval);
 
@@ -398,7 +440,9 @@ impl Cli {
         );
 
         // Fetch all events up to current block
-        let latest_block = client.fetch_batch_events(last_synced_block + 1, u64::MAX).await?;
+        let latest_block = client
+            .fetch_batch_events(last_synced_block + 1, u64::MAX)
+            .await?;
         let current_latest = if !latest_block.is_empty() {
             latest_block.last().unwrap().block_number
         } else {

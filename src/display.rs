@@ -22,6 +22,8 @@ pub fn display_events(events: &[StampEvent]) -> Result<()> {
         block: String,
         #[tabled(rename = "Type")]
         event_type: String,
+        #[tabled(rename = "Contract")]
+        contract: String,
         #[tabled(rename = "Batch ID")]
         batch_id: String,
         #[tabled(rename = "Details")]
@@ -35,6 +37,7 @@ pub fn display_events(events: &[StampEvent]) -> Result<()> {
         .map(|event| EventRow {
             block: event.block_number.to_string(),
             event_type: event.event_type.to_string(),
+            contract: truncate_contract_name(&event.contract_source),
             batch_id: truncate_hash(&event.batch_id),
             details: format_event_details(&event.data),
             timestamp: event.block_timestamp.format("%Y-%m-%d %H:%M").to_string(),
@@ -80,7 +83,19 @@ pub fn display_summary(
         .filter(|e| matches!(e.event_type, EventType::BatchDepthIncrease))
         .count();
 
+    // Count events by contract
+    let postage_stamp_count = events
+        .iter()
+        .filter(|e| e.contract_source == "PostageStamp")
+        .count();
+    let stamps_registry_count = events
+        .iter()
+        .filter(|e| e.contract_source == "StampsRegistry")
+        .count();
+
     println!("- **Total Events:** {}", events.len());
+    println!("  - PostageStamp: {}", postage_stamp_count);
+    println!("  - StampsRegistry: {}", stamps_registry_count);
     println!("- **Batch Created:** {}", batch_created);
     println!("- **Batch Top-ups:** {}", batch_topup);
     println!("- **Batch Depth Increases:** {}", batch_depth_increase);
@@ -233,6 +248,15 @@ fn truncate_hash(hash: &str) -> String {
     }
 }
 
+/// Truncate contract name for display
+fn truncate_contract_name(contract: &str) -> String {
+    match contract {
+        "PostageStamp" => "PostageStamp".to_string(),
+        "StampsRegistry" => "StampsReg".to_string(),
+        _ => contract.to_string(),
+    }
+}
+
 /// Format amount from wei to a more readable format
 fn format_amount(amount: &str) -> String {
     if let Ok(value) = amount.parse::<u128>() {
@@ -277,6 +301,7 @@ mod tests {
             depth: 20,
             bucket_depth: 16,
             immutable_flag: false,
+            payer: None,
         };
 
         let formatted = format_event_details(&data);
