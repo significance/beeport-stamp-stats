@@ -348,6 +348,38 @@ block_number,timestamp,event_type,batch_id,transaction_hash,log_index,details
 - **Deployment Block:** ~37,000,000
 - **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3)
 
+### Understanding Contract Event Relationships
+
+**Important:** When a batch is created through the StampsRegistry contract, **both contracts emit a BatchCreated event in the same transaction**. This means:
+
+- Every StampsRegistry `BatchCreated` event also appears in PostageStamp events
+- The StampsRegistry contract internally calls the PostageStamp contract
+- Both events fire in sequence (PostageStamp first, then StampsRegistry)
+- They share the same transaction hash and block number but have different log indices
+
+**Event Counting:**
+- **Total PostageStamp BatchCreated events:** 6,118
+- **Total StampsRegistry BatchCreated events:** 303
+- **Overlapping batch IDs:** 303 (100% of StampsRegistry events)
+- **Direct PostageStamp purchases:** 5,815 (6,118 - 303)
+
+**To get accurate counts:**
+```bash
+# Total batches created (count PostageStamp events only to avoid double-counting)
+beeport-stamp-stats summary --contract postage-stamp --event-type batch-created
+
+# Batches created via StampsRegistry (UI-based purchases with payer tracking)
+beeport-stamp-stats summary --contract stamps-registry --event-type batch-created
+
+# Direct batches (created directly on PostageStamp, not via StampsRegistry)
+# This requires filtering: PostageStamp count minus StampsRegistry count = 5,815
+```
+
+**Why track both?**
+- **PostageStamp events:** Show all batches created (complete dataset)
+- **StampsRegistry events:** Identify which batches were created via the UI and include payer information
+- **Difference:** Reveals batches created programmatically or via other interfaces
+
 ## Extending with New Contracts
 
 The system is designed to be easily extensible. Here's how to add support for a new contract:
