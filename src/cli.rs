@@ -112,6 +112,63 @@ pub enum Commands {
         #[arg(long, default_value = "true")]
         display: bool,
     },
+
+    /// Sync database with blockchain (update with latest events)
+    Sync {
+        /// Start block number (defaults to last synced block in database)
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest block)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Specific contract to sync (defaults to all contracts)
+        #[arg(long)]
+        contract: Option<String>,
+    },
+
+    /// Display batch status with TTL and expiry information
+    BatchStatus {
+        /// Sort results by field
+        #[arg(long, default_value = "batch-id")]
+        sort_by: BatchStatusSortBy,
+
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Override current storage price (PLUR per chunk per block)
+        #[arg(long)]
+        price: Option<String>,
+
+        /// Expected price change as percentage:days (e.g., "200:10" for 200% in 10 days)
+        #[arg(long)]
+        price_change: Option<String>,
+    },
+
+    /// Analyze batch expiry patterns over time
+    ExpiryAnalytics {
+        /// Time period for grouping
+        #[arg(long, default_value = "day")]
+        period: TimePeriod,
+
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Sort results by field
+        #[arg(long, default_value = "period")]
+        sort_by: ExpiryAnalyticsSortBy,
+
+        /// Override current storage price (PLUR per chunk per block)
+        #[arg(long)]
+        price: Option<String>,
+
+        /// Expected price change as percentage:days (e.g., "200:10" for 200% in 10 days)
+        #[arg(long)]
+        price_change: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -169,6 +226,35 @@ pub enum ExportDataType {
 pub enum ExportFormat {
     Csv,
     Json,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum OutputFormat {
+    Table,
+    Csv,
+    Json,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum TimePeriod {
+    Day,
+    Week,
+    Month,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum BatchStatusSortBy {
+    BatchId,
+    Ttl,
+    Expiry,
+    Size,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum ExpiryAnalyticsSortBy {
+    Period,
+    Chunks,
+    Storage,
 }
 
 impl From<ExportFormat> for export::ExportFormat {
@@ -236,6 +322,46 @@ impl Cli {
                 poll_interval,
                 display,
             } => self.execute_follow(cache, *poll_interval, *display).await,
+            Commands::Sync {
+                from_block,
+                to_block,
+                contract,
+            } => {
+                self.execute_sync(cache, *from_block, *to_block, contract.clone())
+                    .await
+            }
+            Commands::BatchStatus {
+                sort_by,
+                output,
+                price,
+                price_change,
+            } => {
+                self.execute_batch_status(
+                    cache,
+                    sort_by.clone(),
+                    output.clone(),
+                    price.clone(),
+                    price_change.clone(),
+                )
+                .await
+            }
+            Commands::ExpiryAnalytics {
+                period,
+                output,
+                sort_by,
+                price,
+                price_change,
+            } => {
+                self.execute_expiry_analytics(
+                    cache,
+                    period.clone(),
+                    output.clone(),
+                    sort_by.clone(),
+                    price.clone(),
+                    price_change.clone(),
+                )
+                .await
+            }
         }
     }
 
@@ -517,6 +643,93 @@ impl Cli {
                 tracing::debug!("No new events at block {}", last_checked_block);
             }
         }
+    }
+
+    async fn execute_sync(
+        &self,
+        cache: Cache,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        _contract: Option<String>,
+    ) -> Result<()> {
+        tracing::info!("Syncing database with blockchain...");
+
+        let client = BlockchainClient::new(&self.rpc_url).await?;
+
+        // Determine start block
+        let from = from_block
+            .or_else(|| {
+                // Get last synced block from cache
+                futures::executor::block_on(cache.get_last_block())
+                    .ok()
+                    .flatten()
+                    .map(|b| b + 1)
+            })
+            .unwrap_or(DEFAULT_START_BLOCK);
+
+        let to = to_block.unwrap_or(u64::MAX);
+
+        tracing::info!(
+            "Syncing from block {} to {}",
+            from,
+            if to == u64::MAX {
+                "latest".to_string()
+            } else {
+                to.to_string()
+            }
+        );
+
+        // Fetch events
+        let events = client.fetch_batch_events(from, to, &cache).await?;
+
+        if events.is_empty() {
+            println!("✅ Database is already up to date!");
+            return Ok(());
+        }
+
+        tracing::info!("Found {} new events", events.len());
+
+        // Fetch batch information
+        let batches = client.fetch_batch_info(&events).await?;
+
+        // Store in database
+        cache.store_events(&events).await?;
+        cache.store_batches(&batches).await?;
+
+        println!(
+            "✅ Synced {} events and {} batches to database",
+            events.len(),
+            batches.len()
+        );
+
+        Ok(())
+    }
+
+    async fn execute_batch_status(
+        &self,
+        _cache: Cache,
+        _sort_by: BatchStatusSortBy,
+        _output: OutputFormat,
+        _price: Option<String>,
+        _price_change: Option<String>,
+    ) -> Result<()> {
+        // TODO: Implement batch status command
+        println!("Batch status command - coming soon!");
+        Ok(())
+    }
+
+    async fn execute_expiry_analytics(
+        &self,
+        _cache: Cache,
+        _period: TimePeriod,
+        _output: OutputFormat,
+        _sort_by: ExpiryAnalyticsSortBy,
+        _price: Option<String>,
+        _price_change: Option<String>,
+    ) -> Result<()> {
+        // TODO: Implement expiry analytics command
+        println!("Expiry analytics command - coming soon!");
+        Ok(())
     }
 }
 
