@@ -167,7 +167,10 @@ pub async fn execute(
                 .get_remaining_balance(&batch.batch_id)
                 .await
                 .unwrap_or_else(|e| {
-                    tracing::warn!("Failed to get balance for {}: {}", batch.batch_id, e);
+                    // Only log if it's not the common "batch doesn't exist" error
+                    if !e.to_string().contains("0x4ee9bc0f") {
+                        tracing::warn!("Failed to get balance for {}: {}", batch.batch_id, e);
+                    }
                     "0".to_string()
                 });
 
