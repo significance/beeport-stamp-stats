@@ -182,8 +182,8 @@ pub async fn execute(
             balance
         };
 
-        // Small delay to avoid rate limiting (10ms between requests)
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        // Small delay to avoid rate limiting (1ms between requests)
+        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
 
         // Create a modified batch with current balance
         let mut current_batch = batch.clone();
