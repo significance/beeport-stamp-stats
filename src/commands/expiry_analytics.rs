@@ -198,6 +198,9 @@ pub async fn execute(
             balance
         };
 
+        // Small delay to avoid rate limiting (10ms between requests)
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
         // Skip batches with zero balance (already expired)
         if remaining_balance == "0" {
             skipped += 1;

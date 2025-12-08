@@ -182,6 +182,9 @@ pub async fn execute(
             balance
         };
 
+        // Small delay to avoid rate limiting (10ms between requests)
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
         // Create a modified batch with current balance
         let mut current_batch = batch.clone();
         current_batch.normalised_balance = remaining_balance;

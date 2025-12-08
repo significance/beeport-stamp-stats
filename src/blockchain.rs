@@ -401,10 +401,11 @@ impl BlockchainClient {
             .map_err(|e| StampError::Rpc(format!("Failed to get current block: {}", e)))
     }
 
-    /// Get remaining balance for a batch from the blockchain
+    /// Get remaining balance for a batch from the blockchain with retry logic
     pub async fn get_remaining_balance(&self, batch_id: &str) -> Result<String> {
         use crate::contracts::{PostageStamp, POSTAGE_STAMP_ADDRESS};
         use alloy::primitives::{Address, FixedBytes};
+        use tokio::time::{sleep, Duration};
 
         let contract_address = Address::from_str(POSTAGE_STAMP_ADDRESS)
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
@@ -415,13 +416,33 @@ impl BlockchainClient {
 
         let contract = PostageStamp::new(contract_address, &self.provider);
 
-        let balance = contract
-            .remainingBalance(batch_id_bytes)
-            .call()
-            .await
-            .map_err(|e| StampError::Rpc(format!("Failed to get remaining balance: {}", e)))?;
+        // Retry with exponential backoff for rate limit errors
+        let mut retries = 0;
+        const MAX_RETRIES: u32 = 5;
 
-        Ok(balance._0.to_string())
+        loop {
+            match contract.remainingBalance(batch_id_bytes).call().await {
+                Ok(balance) => return Ok(balance._0.to_string()),
+                Err(e) => {
+                    let error_msg = e.to_string();
+
+                    // Check if it's a rate limit error (429)
+                    if error_msg.contains("429") || error_msg.contains("Too Many Requests") {
+                        if retries < MAX_RETRIES {
+                            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
+                            let delay_ms = 100 * 2u64.pow(retries);
+                            tracing::debug!("Rate limited, retrying after {}ms (attempt {}/{})", delay_ms, retries + 1, MAX_RETRIES);
+                            sleep(Duration::from_millis(delay_ms)).await;
+                            retries += 1;
+                            continue;
+                        }
+                    }
+
+                    // For other errors or max retries exceeded, return the error
+                    return Err(StampError::Rpc(format!("Failed to get remaining balance: {}", e)));
+                }
+            }
+        }
     }
 
     /// Fetch batch information for BatchCreated events
