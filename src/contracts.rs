@@ -52,6 +52,19 @@ sol! {
     PostageStamp,
     r#"[
         {
+            "inputs": [],
+            "name": "lastPrice",
+            "outputs": [
+                {
+                    "internalType": "uint64",
+                    "name": "",
+                    "type": "uint64"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
             "anonymous": false,
             "inputs": [
                 {

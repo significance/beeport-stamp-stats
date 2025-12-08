@@ -375,13 +375,22 @@ impl BlockchainClient {
     }
 
     /// Get current storage price from blockchain
-    /// This would typically call a contract method to get the current price
-    /// For now, we'll use a default value that can be overridden by the user
     pub async fn get_current_price(&self) -> Result<u128> {
-        // TODO: Implement actual contract call to get current price
-        // For now, return a default placeholder value
-        // This is approximately 24000 PLUR per chunk per block (a reasonable estimate)
-        Ok(24000u128)
+        use crate::contracts::{PostageStamp, POSTAGE_STAMP_ADDRESS};
+        use alloy::primitives::Address;
+
+        let contract_address = Address::from_str(POSTAGE_STAMP_ADDRESS)
+            .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
+
+        let contract = PostageStamp::new(contract_address, &self.provider);
+
+        let price = contract
+            .lastPrice()
+            .call()
+            .await
+            .map_err(|e| StampError::Rpc(format!("Failed to get current price: {}", e)))?;
+
+        Ok(price._0 as u128)
     }
 
     /// Get current block number

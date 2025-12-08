@@ -147,6 +147,9 @@ pub enum Commands {
         price_change: Option<String>,
     },
 
+    /// Get current storage price from the blockchain
+    Price,
+
     /// Analyze batch expiry patterns over time
     ExpiryAnalytics {
         /// Time period for grouping
@@ -330,6 +333,7 @@ impl Cli {
                 self.execute_sync(cache, *from_block, *to_block, contract.clone())
                     .await
             }
+            Commands::Price => self.execute_price().await,
             Commands::BatchStatus {
                 sort_by,
                 output,
@@ -645,6 +649,22 @@ impl Cli {
         }
     }
 
+    async fn execute_price(&self) -> Result<()> {
+        tracing::info!("Querying current storage price from blockchain...");
+
+        let client = BlockchainClient::new(&self.rpc_url).await?;
+        let price = client.get_current_price().await?;
+        let current_block = client.get_current_block().await?;
+
+        println!("\n📊 Current Storage Price\n");
+        println!("Price per chunk per block: {} PLUR", format_number(price));
+        println!("Current block: {}", format_number(current_block as u128));
+        println!("\nThis price is used to calculate batch TTL (Time To Live).");
+        println!("Use --price {} with batch-status or expiry-analytics commands.", price);
+
+        Ok(())
+    }
+
     async fn execute_sync(
         &self,
         cache: Cache,
@@ -741,6 +761,22 @@ impl Cli {
         .await
         .map_err(|e| anyhow::anyhow!(e))
     }
+}
+
+/// Format large numbers with thousand separators
+fn format_number(n: u128) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let len = s.len();
+
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+
+    result
 }
 
 #[cfg(test)]
