@@ -19,6 +19,9 @@ pub enum StampError {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("CSV error: {0}")]
+    Csv(#[from] csv::Error),
 }
 
 pub type Result<T> = std::result::Result<T, StampError>;

@@ -374,6 +374,24 @@ impl BlockchainClient {
         Ok(None)
     }
 
+    /// Get current storage price from blockchain
+    /// This would typically call a contract method to get the current price
+    /// For now, we'll use a default value that can be overridden by the user
+    pub async fn get_current_price(&self) -> Result<u128> {
+        // TODO: Implement actual contract call to get current price
+        // For now, return a default placeholder value
+        // This is approximately 24000 PLUR per chunk per block (a reasonable estimate)
+        Ok(24000u128)
+    }
+
+    /// Get current block number
+    pub async fn get_current_block(&self) -> Result<u64> {
+        self.provider
+            .get_block_number()
+            .await
+            .map_err(|e| StampError::Rpc(format!("Failed to get current block: {}", e)))
+    }
+
     /// Fetch batch information for BatchCreated events
     pub async fn fetch_batch_info(&self, events: &[StampEvent]) -> Result<Vec<BatchInfo>> {
         let mut batches = Vec::new();

@@ -707,29 +707,39 @@ impl Cli {
 
     async fn execute_batch_status(
         &self,
-        _cache: Cache,
-        _sort_by: BatchStatusSortBy,
-        _output: OutputFormat,
-        _price: Option<String>,
-        _price_change: Option<String>,
+        cache: Cache,
+        sort_by: BatchStatusSortBy,
+        output: OutputFormat,
+        price: Option<String>,
+        price_change: Option<String>,
     ) -> Result<()> {
-        // TODO: Implement batch status command
-        println!("Batch status command - coming soon!");
-        Ok(())
+        let client = BlockchainClient::new(&self.rpc_url).await?;
+        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     async fn execute_expiry_analytics(
         &self,
-        _cache: Cache,
-        _period: TimePeriod,
-        _output: OutputFormat,
-        _sort_by: ExpiryAnalyticsSortBy,
-        _price: Option<String>,
-        _price_change: Option<String>,
+        cache: Cache,
+        period: TimePeriod,
+        output: OutputFormat,
+        sort_by: ExpiryAnalyticsSortBy,
+        price: Option<String>,
+        price_change: Option<String>,
     ) -> Result<()> {
-        // TODO: Implement expiry analytics command
-        println!("Expiry analytics command - coming soon!");
-        Ok(())
+        let client = BlockchainClient::new(&self.rpc_url).await?;
+        crate::commands::expiry_analytics::execute(
+            cache,
+            &client,
+            period,
+            output,
+            sort_by,
+            price,
+            price_change,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
     }
 }
 
