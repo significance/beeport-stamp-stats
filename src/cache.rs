@@ -97,6 +97,26 @@ impl Cache {
         .execute(&self.pool)
         .await?;
 
+        // Create batch balance cache table
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS batch_balances (
+                batch_id TEXT PRIMARY KEY,
+                remaining_balance TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL,
+                fetched_block INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_batch_balances_fetched ON batch_balances(fetched_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -333,6 +353,47 @@ impl Cache {
         let total_events: i64 = row.get("total_events");
 
         Ok((chunk_count, total_events))
+    }
+
+    /// Get cached batch balance if available and not too old (within 100 blocks)
+    pub async fn get_cached_balance(&self, batch_id: &str, current_block: u64) -> Result<Option<String>> {
+        let row = sqlx::query(
+            "SELECT remaining_balance, fetched_block FROM batch_balances WHERE batch_id = ?",
+        )
+        .bind(batch_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let fetched_block: i64 = row.get("fetched_block");
+            // Consider cache valid if fetched within last 100 blocks (~8 minutes at 5s/block)
+            if current_block.saturating_sub(fetched_block as u64) < 100 {
+                return Ok(Some(row.get("remaining_balance")));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Cache a batch balance
+    pub async fn cache_balance(&self, batch_id: &str, balance: &str, current_block: u64) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO batch_balances
+            (batch_id, remaining_balance, fetched_at, fetched_block)
+            VALUES (?, ?, ?, ?)
+            "#,
+        )
+        .bind(batch_id)
+        .bind(balance)
+        .bind(now)
+        .bind(current_block as i64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

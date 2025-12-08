@@ -139,14 +139,45 @@ pub async fn execute(
     // Calculate status for each batch, fetching current balance from blockchain
     let mut statuses: Vec<BatchStatus> = Vec::new();
 
-    tracing::info!("Fetching current balances for {} batches from blockchain...", batches.len());
+    println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
+    println!("Using cache for recent queries. Progress will be shown every 100 batches.\n");
 
-    for batch in &batches {
-        // Fetch current remaining balance from blockchain
-        let remaining_balance = blockchain_client
-            .get_remaining_balance(&batch.batch_id)
-            .await
-            .unwrap_or_else(|_| "0".to_string());
+    let total = batches.len();
+    let mut cache_hits = 0;
+    let mut cache_misses = 0;
+
+    for (idx, batch) in batches.iter().enumerate() {
+        // Show progress every 100 batches
+        if idx % 100 == 0 && idx > 0 {
+            println!(
+                "  ⏳ Progress: {}/{} batches ({:.1}%) - Cache: {} hits, {} misses",
+                idx, total, (idx as f64 / total as f64) * 100.0, cache_hits, cache_misses
+            );
+        }
+
+        // Try to get from cache first
+        let remaining_balance = if let Ok(Some(cached)) = cache.get_cached_balance(&batch.batch_id, current_block).await {
+            cache_hits += 1;
+            tracing::debug!("Cache hit for batch {}", batch.batch_id);
+            cached
+        } else {
+            cache_misses += 1;
+            // Fetch current remaining balance from blockchain
+            let balance = blockchain_client
+                .get_remaining_balance(&batch.batch_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to get balance for {}: {}", batch.batch_id, e);
+                    "0".to_string()
+                });
+
+            // Cache the result
+            if let Err(e) = cache.cache_balance(&batch.batch_id, &balance, current_block).await {
+                tracing::warn!("Failed to cache balance: {}", e);
+            }
+
+            balance
+        };
 
         // Create a modified batch with current balance
         let mut current_batch = batch.clone();
@@ -156,6 +187,11 @@ pub async fn execute(
             statuses.push(status);
         }
     }
+
+    println!(
+        "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} misses\n",
+        total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses
+    );
 
     // Sort results
     match sort_by {
