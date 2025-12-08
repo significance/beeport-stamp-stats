@@ -8,6 +8,7 @@ mod error;
 mod events;
 mod export;
 mod hooks;
+mod price;
 
 use anyhow::Result;
 use clap::Parser;
