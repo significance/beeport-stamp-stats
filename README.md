@@ -27,7 +27,12 @@ This tool provides real-time tracking and historical analysis of postage stamp b
   - Export events, batches, or aggregated statistics
   - Apply filters during export
   - Time-range selection
-- **Comprehensive Testing**: 28 unit tests with 100% coverage of core functionality
+- **Batch Analysis Tools**:
+  - **Batch Status**: View TTL, expiry dates, and size for all batches
+  - **Expiry Analytics**: Aggregate batch expirations by time period
+  - **Price Modeling**: Model price changes to predict batch lifetimes
+  - **Multiple Export Formats**: Table, CSV, and JSON output
+- **Comprehensive Testing**: 41 unit tests with 100% coverage of core functionality
 
 ### Technology Stack
 - **Rust 2024 Edition** - Latest Rust features and idioms
@@ -147,7 +152,113 @@ Currently implements a stub hook for demonstration, but can be extended to:
 - Execute contract-specific custom logic
 - Route events to different systems based on contract source
 
-#### 4. Export Data
+#### 4. Sync Database
+
+Update the local database with latest blockchain events:
+
+```bash
+# Sync from last synced block to latest
+beeport-stamp-stats sync
+
+# Sync specific block range
+beeport-stamp-stats sync --from-block 38000000 --to-block 38500000
+
+# Sync from specific block to latest
+beeport-stamp-stats sync --from-block 38000000
+```
+
+**Difference from `fetch`:** The `sync` command is optimized for keeping the database up to date without displaying events. Use `fetch` when you want to see the events as they're retrieved, and `sync` for background updates.
+
+#### 5. Batch Status Analysis
+
+Display detailed status information for all batches, including time-to-live (TTL) and expiry dates:
+
+```bash
+# View batch status with default sorting (by batch ID)
+beeport-stamp-stats batch-status
+
+# Sort by time to live (batches expiring soonest first)
+beeport-stamp-stats batch-status --sort-by ttl
+
+# Sort by expiry date
+beeport-stamp-stats batch-status --sort-by expiry
+
+# Sort by batch size (largest first)
+beeport-stamp-stats batch-status --sort-by size
+
+# Export to CSV
+beeport-stamp-stats batch-status --output csv > batch-status.csv
+
+# Export to JSON
+beeport-stamp-stats batch-status --output json > batch-status.json
+
+# Use custom storage price (in PLUR per chunk per block)
+beeport-stamp-stats batch-status --price 30000
+
+# Model price increase: 200% increase over 10 days
+beeport-stamp-stats batch-status --price-change 200:10
+
+# Combine custom price and price change
+beeport-stamp-stats batch-status --price 25000 --price-change 150:7
+```
+
+**Output includes:**
+- Batch ID
+- Depth (storage capacity)
+- Size in chunks (2^depth)
+- TTL in blocks
+- TTL in days
+- Estimated expiry date (based on current block and price)
+
+#### 6. Expiry Analytics
+
+Analyze when batches will expire, aggregated by time period:
+
+```bash
+# View expiry analytics by day (default)
+beeport-stamp-stats expiry-analytics
+
+# Group by week
+beeport-stamp-stats expiry-analytics --period week
+
+# Group by month
+beeport-stamp-stats expiry-analytics --period month
+
+# Sort by number of chunks expiring (largest first)
+beeport-stamp-stats expiry-analytics --sort-by chunks
+
+# Sort by storage capacity expiring
+beeport-stamp-stats expiry-analytics --sort-by storage
+
+# Export to CSV
+beeport-stamp-stats expiry-analytics --output csv > expiry-analytics.csv
+
+# Export to JSON
+beeport-stamp-stats expiry-analytics --output json > expiry-analytics.json
+
+# With custom price
+beeport-stamp-stats expiry-analytics --period week --price 28000
+
+# Model declining storage prices: -50% over 30 days
+beeport-stamp-stats expiry-analytics --period month --price-change -50:30
+
+# Model increasing prices: 300% over 14 days
+beeport-stamp-stats expiry-analytics --period day --price-change 300:14
+```
+
+**Output includes:**
+- Time period (formatted based on grouping)
+- Number of batches expiring in that period
+- Total chunks expiring
+- Total storage capacity expiring (in human-readable format: KB, MB, GB, TB, PB)
+
+**Use cases:**
+- Identify when to expect capacity to expire
+- Plan for batch renewals
+- Understand storage lifecycle patterns
+- Model different price scenarios
+
+#### 7. Export Data
 
 Export cached data to CSV or JSON for further analysis:
 
@@ -331,6 +442,140 @@ block_number,timestamp,event_type,batch_id,transaction_hash,log_index,details
   }
 ]
 ```
+
+## Understanding Price Calculations and TTL
+
+### How Batch TTL is Calculated
+
+The Time To Live (TTL) for a postage stamp batch represents how long the batch will remain valid before it needs to be topped up. The calculation is based on:
+
+1. **Normalised Balance**: The amount of PLUR tokens allocated to the batch
+2. **Batch Depth**: Determines the number of chunks (storage slots) in the batch
+3. **Storage Price**: The cost per chunk per block in PLUR
+
+**Formula:**
+```
+chunks = 2^depth
+total_price_per_block = price_per_chunk_per_block × chunks
+ttl_blocks = normalised_balance / total_price_per_block
+ttl_days = ttl_blocks × 5_seconds_per_block / 86400_seconds_per_day
+```
+
+**Example:**
+- Normalised Balance: 10,000,000,000 PLUR (10^10)
+- Depth: 20 (= 1,048,576 chunks)
+- Price: 24,000 PLUR per chunk per block
+- TTL: 10,000,000,000 / (24,000 × 1,048,576) ≈ 397 blocks ≈ 0.023 days
+
+### Price Change Modeling
+
+The `--price-change` flag allows you to model scenarios where storage prices change over time. This is crucial for accurate TTL predictions in dynamic market conditions.
+
+**Format:** `--price-change PERCENTAGE:DAYS`
+
+Where:
+- **PERCENTAGE**: The percentage change in price (positive for increase, negative for decrease)
+- **DAYS**: The number of days over which this change occurs
+
+**Examples:**
+
+```bash
+# 200% increase over 10 days (price triples from P to 3P)
+--price-change 200:10
+
+# 50% increase over 7 days
+--price-change 50:7
+
+# 50% decrease over 30 days (price halves)
+--price-change -50:30
+
+# 100% increase over 1 day (price doubles)
+--price-change 100:1
+```
+
+### How Price Change Affects TTL
+
+When prices change exponentially over time, we can't simply use the current price to calculate TTL. Instead, we need to calculate the **average effective price** over the batch's lifetime.
+
+**Mathematical Model:**
+
+1. **Daily Growth Rate**:
+   ```
+   r = (1 + percentage/100)^(1/days)
+   ```
+
+2. **Average Price** (integrating the exponential curve):
+   ```
+   avg_price = current_price × (r^ttl_days - 1) / (ln(r) × ttl_days)
+   ```
+
+**Example:**
+
+Current price: 24,000 PLUR per chunk per block
+Price change: 200% over 10 days (will become 72,000)
+Initial TTL estimate: 30 days at current price
+
+The effective average price accounts for the exponential increase:
+- Day 1: 24,000 PLUR
+- Day 5: ~35,834 PLUR
+- Day 10: 72,000 PLUR
+
+Average effective price ≈ 43,500 PLUR
+Adjusted TTL ≈ 16.5 days (instead of 30 days)
+
+### Practical Use Cases
+
+**1. Conservative Planning (Rising Prices):**
+```bash
+# Expect prices to triple over the next 2 weeks
+beeport-stamp-stats batch-status --price-change 200:14 --sort-by ttl
+```
+This shows which batches will expire soonest under rising price pressure.
+
+**2. Optimistic Planning (Falling Prices):**
+```bash
+# Expect prices to halve over the next month
+beeport-stamp-stats expiry-analytics --price-change -50:30 --period week
+```
+This models how much longer batches will last if prices decrease.
+
+**3. Scenario Comparison:**
+```bash
+# Current price scenario
+beeport-stamp-stats batch-status --output json > current.json
+
+# Rising price scenario
+beeport-stamp-stats batch-status --price-change 150:7 --output json > rising.json
+
+# Falling price scenario
+beeport-stamp-stats batch-status --price-change -40:14 --output json > falling.json
+```
+Compare the different scenarios to make informed decisions.
+
+**4. Custom Price Override:**
+```bash
+# Use a specific price (e.g., from recent on-chain data)
+beeport-stamp-stats batch-status --price 28500
+
+# Combine with price change for full control
+beeport-stamp-stats expiry-analytics --price 28500 --price-change 100:5
+```
+
+### Important Notes
+
+- **Default Price**: When no `--price` is specified, the tool uses a default value of 24,000 PLUR per chunk per block (a reasonable estimate based on historical data)
+- **Block Time**: Calculations assume 5 seconds per block on Gnosis Chain
+- **Exponential Model**: Price changes are modeled as exponential growth/decay, not linear
+- **Precision**: All calculations use 128-bit integers to avoid overflow with large PLUR values
+
+### Why This Matters
+
+Storage prices on decentralized networks can be volatile. Understanding how price changes affect batch lifetimes helps you:
+
+- **Avoid Unexpected Expiry**: Model price increases to ensure you top up in time
+- **Optimize Costs**: Identify the best time to create or top up batches
+- **Plan Capacity**: Forecast when significant storage capacity will expire
+- **Risk Management**: Understand your exposure to price fluctuations
 
 ## Contract Information
 
@@ -649,7 +894,12 @@ src/
 ├── batch.rs         # Batch aggregation and statistics
 ├── display.rs       # Markdown table formatting
 ├── export.rs        # Data export functionality
-└── error.rs         # Error types and handling
+├── price.rs         # Price calculations and TTL modeling
+├── error.rs         # Error types and handling
+└── commands/
+    ├── mod.rs              # Commands module
+    ├── batch_status.rs     # Batch status analysis command
+    └── expiry_analytics.rs # Expiry analytics command
 ```
 
 ### Key Dependencies
@@ -659,9 +909,11 @@ src/
 - `tokio = 1.43` - Async runtime
 - `sqlx = 0.8` - SQLite with async support
 - `tabled = 0.17` - Table formatting
+- `csv = 1.3` - CSV parsing and writing
 - `chrono = 0.4` - Date/time handling
 - `serde = 1.0` - Serialization
 - `anyhow = 1.0` - Error handling
+- `thiserror = 2.0` - Custom error types
 - `tracing = 0.1` - Structured logging
 
 ## Performance
