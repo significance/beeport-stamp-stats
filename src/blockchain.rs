@@ -401,6 +401,29 @@ impl BlockchainClient {
             .map_err(|e| StampError::Rpc(format!("Failed to get current block: {}", e)))
     }
 
+    /// Get remaining balance for a batch from the blockchain
+    pub async fn get_remaining_balance(&self, batch_id: &str) -> Result<String> {
+        use crate::contracts::{PostageStamp, POSTAGE_STAMP_ADDRESS};
+        use alloy::primitives::{Address, FixedBytes};
+
+        let contract_address = Address::from_str(POSTAGE_STAMP_ADDRESS)
+            .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
+
+        // Parse batch ID as bytes32
+        let batch_id_bytes = FixedBytes::<32>::from_str(batch_id.trim_start_matches("0x"))
+            .map_err(|e| StampError::Parse(format!("Invalid batch ID: {}", e)))?;
+
+        let contract = PostageStamp::new(contract_address, &self.provider);
+
+        let balance = contract
+            .remainingBalance(batch_id_bytes)
+            .call()
+            .await
+            .map_err(|e| StampError::Rpc(format!("Failed to get remaining balance: {}", e)))?;
+
+        Ok(balance._0.to_string())
+    }
+
     /// Fetch batch information for BatchCreated events
     pub async fn fetch_batch_info(&self, events: &[StampEvent]) -> Result<Vec<BatchInfo>> {
         let mut batches = Vec::new();

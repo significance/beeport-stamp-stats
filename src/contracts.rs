@@ -52,6 +52,25 @@ sol! {
     PostageStamp,
     r#"[
         {
+            "inputs": [
+                {
+                    "internalType": "bytes32",
+                    "name": "_batchId",
+                    "type": "bytes32"
+                }
+            ],
+            "name": "remainingBalance",
+            "outputs": [
+                {
+                    "internalType": "uint256",
+                    "name": "",
+                    "type": "uint256"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
             "inputs": [],
             "name": "lastPrice",
             "outputs": [

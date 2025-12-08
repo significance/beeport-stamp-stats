@@ -152,13 +152,29 @@ pub async fn execute(
     let _current_block = blockchain_client.get_current_block().await?;
 
     // Calculate expiry for each batch and group by period
-    let mut period_map: HashMap<String, (DateTime<Utc>, Vec<&BatchInfo>)> = HashMap::new();
+    let mut period_map: HashMap<String, (DateTime<Utc>, Vec<BatchInfo>)> = HashMap::new();
+
+    tracing::info!("Fetching current balances for {} batches from blockchain...", batches.len());
 
     for batch in &batches {
-        // Calculate TTL
+        // Fetch current remaining balance from blockchain
+        let remaining_balance = blockchain_client
+            .get_remaining_balance(&batch.batch_id)
+            .await
+            .unwrap_or_else(|_| "0".to_string());
+
+        // Skip batches with zero balance (already expired)
+        if remaining_balance == "0" {
+            continue;
+        }
+
+        // Create a modified batch with current balance
+        let mut current_batch = batch.clone();
+        current_batch.normalised_balance = remaining_balance;
+        // Calculate TTL using current balance
         let ttl_blocks = calculate_ttl_blocks(
-            &batch.normalised_balance,
-            batch.depth,
+            &current_batch.normalised_balance,
+            current_batch.depth,
             price_config.base_price,
         )?;
 
@@ -167,7 +183,7 @@ pub async fn execute(
         // If price change is configured, recalculate with effective price
         let final_ttl_blocks = if let Some(ref price_change) = price_config.price_change {
             let effective_price = price_change.average_price(price_config.base_price, ttl_days_value);
-            calculate_ttl_blocks(&batch.normalised_balance, batch.depth, effective_price)?
+            calculate_ttl_blocks(&current_batch.normalised_balance, current_batch.depth, effective_price)?
         } else {
             ttl_blocks
         };
@@ -183,7 +199,7 @@ pub async fn execute(
             .entry(period_key)
             .or_insert((period_start, Vec::new()))
             .1
-            .push(batch);
+            .push(current_batch);
     }
 
     // Create expiry periods

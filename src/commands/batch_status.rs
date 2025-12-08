@@ -136,11 +136,26 @@ pub async fn execute(
     // Get current block
     let current_block = blockchain_client.get_current_block().await?;
 
-    // Calculate status for each batch
-    let mut statuses: Vec<BatchStatus> = batches
-        .iter()
-        .filter_map(|batch| BatchStatus::from_batch(batch, &price_config, current_block).ok())
-        .collect();
+    // Calculate status for each batch, fetching current balance from blockchain
+    let mut statuses: Vec<BatchStatus> = Vec::new();
+
+    tracing::info!("Fetching current balances for {} batches from blockchain...", batches.len());
+
+    for batch in &batches {
+        // Fetch current remaining balance from blockchain
+        let remaining_balance = blockchain_client
+            .get_remaining_balance(&batch.batch_id)
+            .await
+            .unwrap_or_else(|_| "0".to_string());
+
+        // Create a modified batch with current balance
+        let mut current_batch = batch.clone();
+        current_batch.normalised_balance = remaining_balance;
+
+        if let Ok(status) = BatchStatus::from_batch(&current_batch, &price_config, current_block) {
+            statuses.push(status);
+        }
+    }
 
     // Sort results
     match sort_by {
