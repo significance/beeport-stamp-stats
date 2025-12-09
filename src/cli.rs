@@ -145,6 +145,22 @@ pub enum Commands {
         /// Expected price change as percentage:days (e.g., "200:10" for 200% in 10 days)
         #[arg(long)]
         price_change: Option<String>,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Only fetch batches that don't have cached balance (useful for retrying failures)
+        #[arg(long, default_value = "false")]
+        only_missing: bool,
+
+        /// Maximum number of retries for rate-limited requests
+        #[arg(long, default_value = "20")]
+        max_retries: u32,
+
+        /// Hide batches with zero balance (show only active batches)
+        #[arg(long, default_value = "false")]
+        hide_zero_balance: bool,
     },
 
     /// Get current storage price from the blockchain
@@ -171,6 +187,14 @@ pub enum Commands {
         /// Expected price change as percentage:days (e.g., "200:10" for 200% in 10 days)
         #[arg(long)]
         price_change: Option<String>,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Maximum number of retries for rate-limited requests
+        #[arg(long, default_value = "20")]
+        max_retries: u32,
     },
 }
 
@@ -248,6 +272,7 @@ pub enum TimePeriod {
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum BatchStatusSortBy {
     BatchId,
+    Depth,
     Ttl,
     Expiry,
     Size,
@@ -339,6 +364,10 @@ impl Cli {
                 output,
                 price,
                 price_change,
+                refresh,
+                only_missing,
+                max_retries,
+                hide_zero_balance,
             } => {
                 self.execute_batch_status(
                     cache,
@@ -346,6 +375,10 @@ impl Cli {
                     output.clone(),
                     price.clone(),
                     price_change.clone(),
+                    *refresh,
+                    *only_missing,
+                    *max_retries,
+                    *hide_zero_balance,
                 )
                 .await
             }
@@ -355,6 +388,8 @@ impl Cli {
                 sort_by,
                 price,
                 price_change,
+                refresh,
+                max_retries,
             } => {
                 self.execute_expiry_analytics(
                     cache,
@@ -363,6 +398,8 @@ impl Cli {
                     sort_by.clone(),
                     price.clone(),
                     price_change.clone(),
+                    *refresh,
+                    *max_retries,
                 )
                 .await
             }
@@ -716,11 +753,16 @@ impl Cli {
         cache.store_events(&events).await?;
         cache.store_batches(&batches).await?;
 
+        // Cache the current price
+        let current_price = client.get_current_price().await?;
+        cache.cache_price(current_price).await?;
+
         println!(
             "✅ Synced {} events and {} batches to database",
             events.len(),
             batches.len()
         );
+        println!("💰 Cached current price: {} PLUR/chunk/block", current_price);
 
         Ok(())
     }
@@ -732,9 +774,13 @@ impl Cli {
         output: OutputFormat,
         price: Option<String>,
         price_change: Option<String>,
+        refresh: bool,
+        only_missing: bool,
+        max_retries: u32,
+        hide_zero_balance: bool,
     ) -> Result<()> {
         let client = BlockchainClient::new(&self.rpc_url).await?;
-        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change)
+        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change, refresh, only_missing, max_retries, hide_zero_balance)
             .await
             .map_err(|e| anyhow::anyhow!(e))
     }
@@ -747,6 +793,8 @@ impl Cli {
         sort_by: ExpiryAnalyticsSortBy,
         price: Option<String>,
         price_change: Option<String>,
+        refresh: bool,
+        max_retries: u32,
     ) -> Result<()> {
         let client = BlockchainClient::new(&self.rpc_url).await?;
         crate::commands::expiry_analytics::execute(
@@ -757,6 +805,8 @@ impl Cli {
             sort_by,
             price,
             price_change,
+            refresh,
+            max_retries,
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))

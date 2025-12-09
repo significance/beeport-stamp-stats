@@ -3,7 +3,7 @@ use crate::cache::Cache;
 use crate::cli::{BatchStatusSortBy, OutputFormat};
 use crate::error::Result;
 use crate::events::BatchInfo;
-use crate::price::{blocks_to_days, calculate_ttl_blocks, PriceChange, PriceConfig};
+use crate::price::{blocks_to_days, PriceChange, PriceConfig};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
@@ -20,8 +20,11 @@ pub struct BatchStatus {
     #[tabled(rename = "Size (chunks)")]
     pub size_chunks: String,
 
+    #[tabled(rename = "Balance (PLUR)")]
+    pub normalised_balance: String,
+
     #[tabled(rename = "TTL (blocks)")]
-    pub ttl_blocks: u64,
+    pub ttl_blocks: String,
 
     #[tabled(rename = "TTL (days)")]
     pub ttl_days: String,
@@ -43,41 +46,33 @@ impl BatchStatus {
         // Calculate size in chunks (2^depth)
         let size_chunks = 1u128 << batch.depth;
 
-        // Calculate TTL in blocks using the base price first
-        let ttl_blocks = calculate_ttl_blocks(
-            &batch.normalised_balance,
-            batch.depth,
-            price_config.base_price,
-        )?;
+        // Parse balance for calculations
+        let balance_value = batch.normalised_balance.parse::<u128>()
+            .unwrap_or(0);
 
-        // Convert TTL to days
-        let ttl_days_value = blocks_to_days(ttl_blocks);
-
-        // If price change is configured, recalculate with effective price
-        let (final_ttl_blocks, final_ttl_days) = if let Some(ref price_change) = price_config.price_change {
-            let effective_price = price_change.average_price(price_config.base_price, ttl_days_value);
-            let adjusted_ttl_blocks = calculate_ttl_blocks(
-                &batch.normalised_balance,
-                batch.depth,
-                effective_price,
-            )?;
-            let adjusted_ttl_days = blocks_to_days(adjusted_ttl_blocks);
-            (adjusted_ttl_blocks, adjusted_ttl_days)
+        // Calculate TTL in blocks (normalised_balance / price)
+        // Note: normalised_balance is already per-chunk, so we just divide by price (per-chunk per-block)
+        let ttl_blocks = if balance_value > 0 && price_config.base_price > 0 {
+            balance_value / price_config.base_price
         } else {
-            (ttl_blocks, ttl_days_value)
+            0
         };
+
+        // Convert TTL blocks to days
+        let ttl_days_value = blocks_to_days(ttl_blocks as u64);
 
         // Calculate expiry timestamp
         // Assuming 5 seconds per block on Gnosis Chain
-        let seconds_until_expiry = final_ttl_blocks * 5;
+        let seconds_until_expiry = ttl_blocks * 5;
         let expiry_timestamp = Utc::now() + chrono::Duration::seconds(seconds_until_expiry as i64);
 
         Ok(Self {
             batch_id: batch.batch_id.clone(),
             depth: batch.depth,
             size_chunks: format_number(size_chunks),
-            ttl_blocks: final_ttl_blocks,
-            ttl_days: format!("{:.2}", final_ttl_days),
+            normalised_balance: format_number(balance_value),
+            ttl_blocks: format_number(ttl_blocks),
+            ttl_days: format!("{:.2}", ttl_days_value),
             expiry_date: expiry_timestamp.format("%Y-%m-%d %H:%M UTC").to_string(),
             expiry_timestamp,
         })
@@ -108,6 +103,10 @@ pub async fn execute(
     output: OutputFormat,
     price_override: Option<String>,
     price_change_str: Option<String>,
+    refresh: bool,
+    only_missing: bool,
+    max_retries: u32,
+    hide_zero_balance: bool,
 ) -> Result<()> {
     // Get all batches from cache
     let batches = cache.get_batches(0).await?;
@@ -119,11 +118,24 @@ pub async fn execute(
 
     // Determine price configuration
     let base_price = if let Some(price_str) = price_override {
+        // User provided explicit price
         price_str
             .parse::<u128>()
             .map_err(|_| crate::error::StampError::Parse("Invalid price value".to_string()))?
+    } else if refresh {
+        // Refresh mode: fetch current price from blockchain and cache it
+        let price = blockchain_client.get_current_price().await?;
+        cache.cache_price(price).await?;
+        price
     } else {
-        blockchain_client.get_current_price().await?
+        // Use cached price if available, otherwise fetch from blockchain
+        if let Some(cached_price) = cache.get_cached_price().await? {
+            cached_price
+        } else {
+            let price = blockchain_client.get_current_price().await?;
+            cache.cache_price(price).await?;
+            price
+        }
     };
 
     let price_config = if let Some(change_str) = price_change_str {
@@ -139,51 +151,74 @@ pub async fn execute(
     // Calculate status for each batch, fetching current balance from blockchain
     let mut statuses: Vec<BatchStatus> = Vec::new();
 
-    println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
-    println!("Using cache for recent queries. Progress will be shown every 100 batches.\n");
+    if refresh && only_missing {
+        println!("📊 Fetching balances only for batches without cached data...");
+        println!("Using max_retries={} for rate-limited requests. Progress will be shown every 100 batches.\n", max_retries);
+    } else if refresh {
+        println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
+        println!("Using max_retries={} for rate-limited requests. Progress will be shown every 100 batches.\n", max_retries);
+    }
 
     let total = batches.len();
     let mut cache_hits = 0;
     let mut cache_misses = 0;
+    let mut skipped = 0;
 
     for (idx, batch) in batches.iter().enumerate() {
-        // Show progress every 100 batches
-        if idx % 100 == 0 && idx > 0 {
+        // Show progress every 100 batches (only when refreshing)
+        if refresh && idx % 100 == 0 && idx > 0 {
             println!(
-                "  ⏳ Progress: {}/{} batches ({:.1}%) - Cache: {} hits, {} misses",
-                idx, total, (idx as f64 / total as f64) * 100.0, cache_hits, cache_misses
+                "  ⏳ Progress: {}/{} batches ({:.1}%) - Cache: {} hits, {} misses, {} skipped",
+                idx, total, (idx as f64 / total as f64) * 100.0, cache_hits, cache_misses, skipped
             );
         }
 
-        // Try to get from cache first
-        let remaining_balance = if let Ok(Some(cached)) = cache.get_cached_balance(&batch.batch_id, current_block).await {
+        // Check if we have a cached balance
+        let cached_balance = cache.get_cached_balance(&batch.batch_id, current_block).await.ok().flatten();
+
+        // Get balance based on refresh and only_missing flags
+        let remaining_balance = if !refresh {
+            // When refresh=false, use cache if available, otherwise use original balance
+            if let Some(cached) = cached_balance {
+                cache_hits += 1;
+                tracing::debug!("Cache hit for batch {}", batch.batch_id);
+                cached
+            } else {
+                cache_misses += 1;
+                tracing::warn!("No cached balance for batch {}, using creation-time balance", batch.batch_id);
+                batch.normalised_balance.clone() // Use last known balance (creation balance)
+            }
+        } else if only_missing && cached_balance.is_some() {
+            // Skip batches that already have cached balance when only_missing=true
+            skipped += 1;
             cache_hits += 1;
-            tracing::debug!("Cache hit for batch {}", batch.batch_id);
-            cached
+            tracing::debug!("Skipping batch {} (already cached)", batch.batch_id);
+            cached_balance.unwrap()
         } else {
+            // Fetch from blockchain (either refresh=true without only_missing, or refresh=true with only_missing but no cache)
             cache_misses += 1;
-            // Fetch current remaining balance from blockchain
-            let balance = blockchain_client
-                .get_remaining_balance(&batch.batch_id)
-                .await
-                .unwrap_or_else(|e| {
+            match blockchain_client.get_remaining_balance(&batch.batch_id, max_retries).await {
+                Ok(balance) => {
+                    // Only cache successful fetches
+                    if let Err(e) = cache.cache_balance(&batch.batch_id, &balance, current_block).await {
+                        tracing::warn!("Failed to cache balance: {}", e);
+                    }
+
+                    // Small delay to avoid rate limiting (1ms between requests)
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
+                    balance
+                }
+                Err(e) => {
+                    // Don't cache failures - this allows retry with --only-missing later
                     // Only log if it's not the common "batch doesn't exist" error
                     if !e.to_string().contains("0x4ee9bc0f") {
                         tracing::warn!("Failed to get balance for {}: {}", batch.batch_id, e);
                     }
                     "0".to_string()
-                });
-
-            // Cache the result
-            if let Err(e) = cache.cache_balance(&batch.batch_id, &balance, current_block).await {
-                tracing::warn!("Failed to cache balance: {}", e);
+                }
             }
-
-            balance
         };
-
-        // Small delay to avoid rate limiting (1ms between requests)
-        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
 
         // Create a modified batch with current balance
         let mut current_batch = batch.clone();
@@ -194,15 +229,44 @@ pub async fn execute(
         }
     }
 
-    println!(
-        "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} misses\n",
-        total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses
-    );
+    if refresh {
+        if skipped > 0 {
+            println!(
+                "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} fetched, {} skipped\n",
+                total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses, skipped
+            );
+        } else {
+            println!(
+                "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} misses\n",
+                total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses
+            );
+        }
+    } else if cache_misses > 0 {
+        println!("⚠️  {} batches have no cached balance - showing creation-time balance (use --refresh to fetch current)\n", cache_misses);
+    }
+
+    // Filter out zero balance batches if requested
+    let total_before_filter = statuses.len();
+    if hide_zero_balance {
+        statuses.retain(|s| s.normalised_balance != "0");
+        let filtered_count = total_before_filter - statuses.len();
+        if filtered_count > 0 {
+            println!("  🔍 Filtered out {} batches with zero balance\n", filtered_count);
+        }
+    }
 
     // Sort results
     match sort_by {
         BatchStatusSortBy::BatchId => statuses.sort_by(|a, b| a.batch_id.cmp(&b.batch_id)),
-        BatchStatusSortBy::Ttl => statuses.sort_by(|a, b| b.ttl_blocks.cmp(&a.ttl_blocks)),
+        BatchStatusSortBy::Depth => statuses.sort_by(|a, b| b.depth.cmp(&a.depth)), // Descending order
+        BatchStatusSortBy::Ttl => {
+            statuses.sort_by(|a, b| {
+                // Parse ttl_blocks strings (removing commas) for numeric comparison
+                let a_ttl = a.ttl_blocks.replace(",", "").parse::<u128>().unwrap_or(0);
+                let b_ttl = b.ttl_blocks.replace(",", "").parse::<u128>().unwrap_or(0);
+                b_ttl.cmp(&a_ttl) // Descending order (highest TTL first)
+            })
+        }
         BatchStatusSortBy::Expiry => {
             statuses.sort_by(|a, b| a.expiry_timestamp.cmp(&b.expiry_timestamp))
         }
@@ -221,11 +285,13 @@ pub async fn execute(
             use tabled::Table;
             let table = Table::new(&statuses).to_string();
             println!("\n{}\n", table);
-            println!(
-                "Total batches: {} | Base price: {} PLUR/chunk/block",
+
+            let price_info = format!(
+                "Total batches: {} | Price: {} PLUR/chunk/block | TTL (blocks) = Balance / Price | Assuming 5s per block",
                 statuses.len(),
                 format_number(base_price)
             );
+            println!("{}", price_info);
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&statuses)?;
@@ -263,7 +329,7 @@ mod tests {
             depth: 20,
             bucket_depth: 16,
             immutable: false,
-            normalised_balance: "10000000000000000000".to_string(), // 10^19 PLUR
+            normalised_balance: "240000000".to_string(), // 240M PLUR - reasonable for testing
             created_at: Utc::now(),
         };
 
@@ -272,6 +338,9 @@ mod tests {
 
         assert_eq!(status.batch_id, "0x1234");
         assert_eq!(status.depth, 20);
-        assert!(status.ttl_blocks > 0);
+        assert!(status.ttl_blocks != "0");
+        assert!(status.ttl_blocks.len() > 0);
+        // With balance=240M and price=24000, TTL should be 10,000 blocks
+        assert_eq!(status.ttl_blocks, "10,000");
     }
 }

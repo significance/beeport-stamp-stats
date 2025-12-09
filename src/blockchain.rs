@@ -402,7 +402,7 @@ impl BlockchainClient {
     }
 
     /// Get remaining balance for a batch from the blockchain with retry logic
-    pub async fn get_remaining_balance(&self, batch_id: &str) -> Result<String> {
+    pub async fn get_remaining_balance(&self, batch_id: &str, max_retries: u32) -> Result<String> {
         use crate::contracts::{PostageStamp, POSTAGE_STAMP_ADDRESS};
         use alloy::primitives::{Address, FixedBytes};
         use tokio::time::{sleep, Duration};
@@ -418,7 +418,6 @@ impl BlockchainClient {
 
         // Retry with exponential backoff for rate limit errors
         let mut retries = 0;
-        const MAX_RETRIES: u32 = 5;
 
         loop {
             match contract.remainingBalance(batch_id_bytes).call().await {
@@ -428,10 +427,10 @@ impl BlockchainClient {
 
                     // Check if it's a rate limit error (429)
                     if error_msg.contains("429") || error_msg.contains("Too Many Requests") {
-                        if retries < MAX_RETRIES {
-                            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
+                        if retries < max_retries {
+                            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, etc.
                             let delay_ms = 100 * 2u64.pow(retries);
-                            tracing::debug!("Rate limited, retrying after {}ms (attempt {}/{})", delay_ms, retries + 1, MAX_RETRIES);
+                            tracing::debug!("Rate limited, retrying after {}ms (attempt {}/{})", delay_ms, retries + 1, max_retries);
                             sleep(Duration::from_millis(delay_ms)).await;
                             retries += 1;
                             continue;

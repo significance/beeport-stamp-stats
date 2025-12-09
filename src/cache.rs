@@ -117,6 +117,19 @@ impl Cache {
         .execute(&self.pool)
         .await?;
 
+        // Create metadata table for storing last cached price and block
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS cache_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -390,6 +403,43 @@ impl Cache {
         .bind(balance)
         .bind(now)
         .bind(current_block as i64)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Get the last cached price
+    pub async fn get_cached_price(&self) -> Result<Option<u128>> {
+        let row = sqlx::query(
+            "SELECT value FROM cache_metadata WHERE key = 'last_price'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let value: String = row.get("value");
+            let price = value.parse::<u128>()
+                .map_err(|_| crate::error::StampError::Parse("Invalid cached price".to_string()))?;
+            Ok(Some(price))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Cache the current price
+    pub async fn cache_price(&self, price: u128) -> Result<()> {
+        let now = chrono::Utc::now().timestamp();
+
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO cache_metadata
+            (key, value, updated_at)
+            VALUES ('last_price', ?, ?)
+            "#,
+        )
+        .bind(price.to_string())
+        .bind(now)
         .execute(&self.pool)
         .await?;
 

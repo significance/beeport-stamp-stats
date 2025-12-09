@@ -123,6 +123,8 @@ pub async fn execute(
     sort_by: ExpiryAnalyticsSortBy,
     price_override: Option<String>,
     price_change_str: Option<String>,
+    refresh: bool,
+    max_retries: u32,
 ) -> Result<()> {
     // Get all batches from cache
     let batches = cache.get_batches(0).await?;
@@ -134,11 +136,24 @@ pub async fn execute(
 
     // Determine price configuration
     let base_price = if let Some(price_str) = price_override {
+        // User provided explicit price
         price_str
             .parse::<u128>()
             .map_err(|_| crate::error::StampError::Parse("Invalid price value".to_string()))?
+    } else if refresh {
+        // Refresh mode: fetch current price from blockchain and cache it
+        let price = blockchain_client.get_current_price().await?;
+        cache.cache_price(price).await?;
+        price
     } else {
-        blockchain_client.get_current_price().await?
+        // Use cached price if available, otherwise fetch from blockchain
+        if let Some(cached_price) = cache.get_cached_price().await? {
+            cached_price
+        } else {
+            let price = blockchain_client.get_current_price().await?;
+            cache.cache_price(price).await?;
+            price
+        }
     };
 
     let price_config = if let Some(change_str) = price_change_str {
@@ -154,8 +169,13 @@ pub async fn execute(
     // Calculate expiry for each batch and group by period
     let mut period_map: HashMap<String, (DateTime<Utc>, Vec<BatchInfo>)> = HashMap::new();
 
-    println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
-    println!("Using cache for recent queries. Progress will be shown every 100 batches.\n");
+    if refresh {
+        println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
+        println!("Using cache for recent queries. Progress will be shown every 100 batches.\n");
+    } else {
+        println!("📊 Using cached balances for {} batches (pass --refresh to fetch from blockchain)...", batches.len());
+        println!("Progress will be shown every 100 batches.\n");
+    }
 
     let total = batches.len();
     let mut cache_hits = 0;
@@ -171,16 +191,23 @@ pub async fn execute(
             );
         }
 
-        // Try to get from cache first
-        let remaining_balance = if let Ok(Some(cached)) = cache.get_cached_balance(&batch.batch_id, _current_block).await {
-            cache_hits += 1;
-            tracing::debug!("Cache hit for batch {}", batch.batch_id);
-            cached
+        // Get balance based on refresh flag
+        let remaining_balance = if !refresh {
+            // When refresh=false, use cache exclusively or return "0" if not cached
+            if let Ok(Some(cached)) = cache.get_cached_balance(&batch.batch_id, _current_block).await {
+                cache_hits += 1;
+                tracing::debug!("Cache hit for batch {}", batch.batch_id);
+                cached
+            } else {
+                cache_misses += 1;
+                tracing::debug!("No cached balance for batch {}, using 0", batch.batch_id);
+                "0".to_string() // Don't fetch from blockchain
+            }
         } else {
+            // When refresh=true, always fetch from blockchain
             cache_misses += 1;
-            // Fetch current remaining balance from blockchain
             let balance = blockchain_client
-                .get_remaining_balance(&batch.batch_id)
+                .get_remaining_balance(&batch.batch_id, max_retries)
                 .await
                 .unwrap_or_else(|e| {
                     // Only log if it's not the common "batch doesn't exist" error
@@ -195,11 +222,11 @@ pub async fn execute(
                 tracing::warn!("Failed to cache balance: {}", e);
             }
 
+            // Small delay to avoid rate limiting (1ms between requests)
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+
             balance
         };
-
-        // Small delay to avoid rate limiting (1ms between requests)
-        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
 
         // Skip batches with zero balance (already expired)
         if remaining_balance == "0" {
