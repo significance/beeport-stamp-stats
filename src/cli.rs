@@ -272,7 +272,6 @@ pub enum TimePeriod {
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum BatchStatusSortBy {
     BatchId,
-    Depth,
     Ttl,
     Expiry,
     Size,

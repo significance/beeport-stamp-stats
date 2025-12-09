@@ -157,6 +157,10 @@ pub async fn execute(
     } else if refresh {
         println!("📊 Fetching current balances for {} batches from blockchain...", batches.len());
         println!("Using max_retries={} for rate-limited requests. Progress will be shown every 100 batches.\n", max_retries);
+    } else {
+        println!("📊 Using cached balances for {} batches...", batches.len());
+        println!("Note: Batches without cached balance will show creation-time balance (pass --refresh to fetch current balances)");
+        println!("Progress will be shown every 100 batches.\n");
     }
 
     let total = batches.len();
@@ -165,8 +169,8 @@ pub async fn execute(
     let mut skipped = 0;
 
     for (idx, batch) in batches.iter().enumerate() {
-        // Show progress every 100 batches (only when refreshing)
-        if refresh && idx % 100 == 0 && idx > 0 {
+        // Show progress every 100 batches
+        if idx % 100 == 0 && idx > 0 {
             println!(
                 "  ⏳ Progress: {}/{} batches ({:.1}%) - Cache: {} hits, {} misses, {} skipped",
                 idx, total, (idx as f64 / total as f64) * 100.0, cache_hits, cache_misses, skipped
@@ -185,7 +189,7 @@ pub async fn execute(
                 cached
             } else {
                 cache_misses += 1;
-                tracing::warn!("No cached balance for batch {}, using creation-time balance", batch.batch_id);
+                tracing::debug!("No cached balance for batch {}, using original balance from creation", batch.batch_id);
                 batch.normalised_balance.clone() // Use last known balance (creation balance)
             }
         } else if only_missing && cached_balance.is_some() {
@@ -229,20 +233,16 @@ pub async fn execute(
         }
     }
 
-    if refresh {
-        if skipped > 0 {
-            println!(
-                "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} fetched, {} skipped\n",
-                total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses, skipped
-            );
-        } else {
-            println!(
-                "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} misses\n",
-                total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses
-            );
-        }
-    } else if cache_misses > 0 {
-        println!("⚠️  {} batches have no cached balance - showing creation-time balance (use --refresh to fetch current)\n", cache_misses);
+    if skipped > 0 {
+        println!(
+            "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} fetched, {} skipped\n",
+            total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses, skipped
+        );
+    } else {
+        println!(
+            "  ✅ Completed: {}/{} batches - Cache: {} hits ({:.1}%), {} misses\n",
+            total, total, cache_hits, (cache_hits as f64 / total as f64) * 100.0, cache_misses
+        );
     }
 
     // Filter out zero balance batches if requested
@@ -258,7 +258,6 @@ pub async fn execute(
     // Sort results
     match sort_by {
         BatchStatusSortBy::BatchId => statuses.sort_by(|a, b| a.batch_id.cmp(&b.batch_id)),
-        BatchStatusSortBy::Depth => statuses.sort_by(|a, b| b.depth.cmp(&a.depth)), // Descending order
         BatchStatusSortBy::Ttl => {
             statuses.sort_by(|a, b| {
                 // Parse ttl_blocks strings (removing commas) for numeric comparison
@@ -287,7 +286,7 @@ pub async fn execute(
             println!("\n{}\n", table);
 
             let price_info = format!(
-                "Total batches: {} | Price: {} PLUR/chunk/block | TTL (blocks) = Balance / Price | Assuming 5s per block",
+                "Total batches: {} | Price: {} PLUR/chunk/block | TTL (blocks) = Balance / Price",
                 statuses.len(),
                 format_number(base_price)
             );
