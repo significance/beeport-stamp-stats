@@ -22,6 +22,13 @@ impl ContractType {
         }
     }
 
+    pub fn deployment_block(&self) -> u64 {
+        match self {
+            ContractType::PostageStamp => POSTAGE_STAMP_DEPLOYMENT_BLOCK,
+            ContractType::StampsRegistry => STAMPS_REGISTRY_DEPLOYMENT_BLOCK,
+        }
+    }
+
     pub fn all() -> Vec<ContractType> {
         vec![ContractType::PostageStamp, ContractType::StampsRegistry]
     }
@@ -35,15 +42,21 @@ impl std::fmt::Display for ContractType {
 
 // PostageStamp contract address on Gnosis Chain
 // https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293
+// Note: PostageStamp is the original contract, but we also track StampsRegistry for imported batches
 pub const POSTAGE_STAMP_ADDRESS: &str = "0x45a1502382541Cd610CC9068e88727426b696293";
 
 // StampsRegistry contract address on Gnosis Chain
 // https://gnosisscan.io/address/0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3
+// Deployed at block 42,390,510 on Gnosis Chain
 pub const STAMPS_REGISTRY_ADDRESS: &str = "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3";
 
-// Default starting block for fetching events (contract deployment block)
-// This is around Nov 2024 when the contracts were deployed
-pub const DEFAULT_START_BLOCK: u64 = 37_000_000;
+// Contract deployment blocks
+pub const STAMPS_REGISTRY_DEPLOYMENT_BLOCK: u64 = 42_390_510;
+pub const POSTAGE_STAMP_DEPLOYMENT_BLOCK: u64 = 31_305_656; // Approximate, actual block TBD
+
+// Default starting block for fetching events (earliest contract deployment)
+// Using PostageStamp deployment as it's the earlier contract
+pub const DEFAULT_START_BLOCK: u64 = POSTAGE_STAMP_DEPLOYMENT_BLOCK;
 
 // Solidity contract definition for PostageStamp using alloy's sol! macro
 sol! {

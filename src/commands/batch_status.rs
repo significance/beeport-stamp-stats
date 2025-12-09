@@ -107,6 +107,7 @@ pub async fn execute(
     only_missing: bool,
     max_retries: u32,
     hide_zero_balance: bool,
+    cache_validity_blocks: u64,
 ) -> Result<()> {
     // Get all batches from cache
     let batches = cache.get_batches(0).await?;
@@ -178,7 +179,7 @@ pub async fn execute(
         }
 
         // Check if we have a cached balance
-        let cached_balance = cache.get_cached_balance(&batch.batch_id, current_block).await.ok().flatten();
+        let cached_balance = cache.get_cached_balance(&batch.batch_id, current_block, cache_validity_blocks).await.ok().flatten();
 
         // Get balance based on refresh and only_missing flags
         let remaining_balance = if !refresh {
@@ -201,7 +202,7 @@ pub async fn execute(
         } else {
             // Fetch from blockchain (either refresh=true without only_missing, or refresh=true with only_missing but no cache)
             cache_misses += 1;
-            match blockchain_client.get_remaining_balance(&batch.batch_id, max_retries).await {
+            match blockchain_client.get_remaining_balance(&batch.batch_id, max_retries, 100).await {
                 Ok(balance) => {
                     // Only cache successful fetches
                     if let Err(e) = cache.cache_balance(&batch.batch_id, &balance, current_block).await {
@@ -258,6 +259,7 @@ pub async fn execute(
     // Sort results
     match sort_by {
         BatchStatusSortBy::BatchId => statuses.sort_by(|a, b| a.batch_id.cmp(&b.batch_id)),
+        BatchStatusSortBy::Depth => statuses.sort_by(|a, b| b.depth.cmp(&a.depth)), // Descending order (highest depth first)
         BatchStatusSortBy::Ttl => {
             statuses.sort_by(|a, b| {
                 // Parse ttl_blocks strings (removing commas) for numeric comparison

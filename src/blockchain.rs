@@ -4,11 +4,12 @@ use crate::error::{Result, StampError};
 use crate::events::{BatchInfo, EventData, EventType, StampEvent};
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
-use alloy::rpc::types::{BlockTransactionsKind, Filter, Log};
+use alloy::rpc::types::{Block, BlockTransactionsKind, Filter, Log};
 use alloy::sol_types::SolEvent;
 use alloy::transports::http::{Client, Http};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::str::FromStr;
 
 pub struct BlockchainClient {
@@ -27,19 +28,72 @@ impl BlockchainClient {
         Ok(Self { provider })
     }
 
+    /// Helper function to retry an async operation with exponential backoff on rate limit errors
+    async fn retry_with_backoff<F, Fut, T, E>(
+        mut operation: F,
+        max_retries: u32,
+        initial_delay_ms: u64,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, E>>,
+        E: std::error::Error,
+    {
+        use tokio::time::{sleep, Duration};
+
+        let mut retries = 0;
+        loop {
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    let error_msg = e.to_string();
+
+                    // Check if it's a rate limit error (429)
+                    if (error_msg.contains("429") || error_msg.contains("Too Many Requests"))
+                        && retries < max_retries
+                    {
+                        // Exponential backoff with configurable initial delay
+                        let delay_ms = initial_delay_ms * 2u64.pow(retries);
+                        tracing::debug!(
+                            "Rate limited, retrying after {}ms (attempt {}/{})",
+                            delay_ms,
+                            retries + 1,
+                            max_retries
+                        );
+                        sleep(Duration::from_millis(delay_ms)).await;
+                        retries += 1;
+                        continue;
+                    }
+
+                    // For other errors or max retries exceeded, return the error
+                    return Err(StampError::Rpc(format!("Operation failed: {}", e)));
+                }
+            }
+        }
+    }
+
     /// Fetch all batch-related events from all configured contracts
     pub async fn fetch_batch_events(
         &self,
         from_block: u64,
         to_block: u64,
         cache: &Cache,
+        max_retries: u32,
+        initial_delay_ms: u64,
     ) -> Result<Vec<StampEvent>> {
         let mut all_events = Vec::new();
 
         // Fetch events from each contract
         for contract_type in ContractType::all() {
             let events = self
-                .fetch_contract_events(contract_type, from_block, to_block, cache)
+                .fetch_contract_events(
+                    contract_type,
+                    from_block,
+                    to_block,
+                    cache,
+                    max_retries,
+                    initial_delay_ms,
+                )
                 .await?;
             all_events.extend(events);
         }
@@ -71,14 +125,18 @@ impl BlockchainClient {
         from_block: u64,
         to_block: u64,
         cache: &Cache,
+        max_retries: u32,
+        initial_delay_ms: u64,
     ) -> Result<Vec<StampEvent>> {
         let contract_address = Address::from_str(contract_type.address())
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
 
         let mut events = Vec::new();
+        let mut block_cache: HashMap<u64, Block> = HashMap::new();
 
         // Determine the actual to_block
         let to_block = if to_block == u64::MAX {
+            tracing::debug!("RPC: get_block_number()");
             self.provider
                 .get_block_number()
                 .await
@@ -87,18 +145,33 @@ impl BlockchainClient {
             to_block
         };
 
+        // Adjust from_block to not start before contract deployment
+        let deployment_block = contract_type.deployment_block();
+        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
+
+        // Skip if the requested range is entirely before deployment
+        if adjusted_from_block > to_block {
+            tracing::info!(
+                "Skipping {} - contract deployed at block {} (after requested range)",
+                contract_type.name(),
+                deployment_block
+            );
+            return Ok(events);
+        }
+
         tracing::info!(
-            "Fetching {} events from block {} to {}",
+            "Fetching {} events from block {} to {} (contract deployed at {})",
             contract_type.name(),
-            from_block,
-            to_block
+            adjusted_from_block,
+            to_block,
+            deployment_block
         );
 
         // Fetch events in chunks to avoid RPC limits
         const CHUNK_SIZE: u64 = 10000;
-        let mut current_from = from_block;
+        let mut current_from = adjusted_from_block;
 
-        let total_blocks = to_block - from_block + 1;
+        let total_blocks = to_block - adjusted_from_block + 1;
         let total_chunks = (total_blocks + CHUNK_SIZE - 1) / CHUNK_SIZE;
         let mut chunk_num = 0;
 
@@ -139,11 +212,20 @@ impl BlockchainClient {
                 .from_block(current_from)
                 .to_block(current_to);
 
-            let logs = self
-                .provider
-                .get_logs(&filter)
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to fetch logs: {}", e)))?;
+            // Use retry_with_backoff for rate limit handling
+            tracing::debug!(
+                "RPC: get_logs(contract={}, from_block={}, to_block={})",
+                contract_type.address(),
+                current_from,
+                current_to
+            );
+            let provider = &self.provider;
+            let logs = Self::retry_with_backoff(
+                || async { provider.get_logs(&filter).await },
+                max_retries,
+                initial_delay_ms,
+            )
+            .await?;
 
             if logs.len() > 0 {
                 tracing::info!(
@@ -156,7 +238,7 @@ impl BlockchainClient {
             // Parse each log
             let chunk_event_count = events.len();
             for log in logs {
-                if let Some(event) = self.parse_log(contract_type, log).await? {
+                if let Some(event) = self.parse_log(contract_type, log, &mut block_cache).await? {
                     events.push(event);
                 }
             }
@@ -183,11 +265,22 @@ impl BlockchainClient {
             events.len()
         );
 
+        tracing::debug!(
+            "Block cache for {}: {} unique blocks cached",
+            contract_type.name(),
+            block_cache.len()
+        );
+
         Ok(events)
     }
 
     /// Parse a log into a StampEvent based on contract type
-    async fn parse_log(&self, contract_type: ContractType, log: Log) -> Result<Option<StampEvent>> {
+    async fn parse_log(
+        &self,
+        contract_type: ContractType,
+        log: Log,
+        block_cache: &mut HashMap<u64, Block>,
+    ) -> Result<Option<StampEvent>> {
         let block_number = log
             .block_number
             .ok_or_else(|| StampError::Parse("Missing block number".to_string()))?;
@@ -200,13 +293,23 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp
-        let block = self
-            .provider
-            .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-            .await
-            .map_err(|e| StampError::Rpc(format!("Failed to get block: {}", e)))?
-            .ok_or_else(|| StampError::Rpc(format!("Block {} not found", block_number)))?;
+        // Get block timestamp from cache or fetch from RPC
+        let block = if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT for block {}", block_number);
+            cached_block.clone()
+        } else {
+            tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
+            let fetched_block = self
+                .provider
+                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
+                .await
+                .map_err(|e| StampError::Rpc(format!("Failed to get block: {}", e)))?
+                .ok_or_else(|| StampError::Rpc(format!("Block {} not found", block_number)))?;
+
+            // Store in cache for future use
+            block_cache.insert(block_number, fetched_block.clone());
+            fetched_block
+        };
 
         let timestamp = block.header.timestamp;
         let block_timestamp =
@@ -384,6 +487,7 @@ impl BlockchainClient {
 
         let contract = PostageStamp::new(contract_address, &self.provider);
 
+        tracing::debug!("RPC: lastPrice()");
         let price = contract
             .lastPrice()
             .call()
@@ -395,6 +499,7 @@ impl BlockchainClient {
 
     /// Get current block number
     pub async fn get_current_block(&self) -> Result<u64> {
+        tracing::debug!("RPC: get_block_number()");
         self.provider
             .get_block_number()
             .await
@@ -402,10 +507,14 @@ impl BlockchainClient {
     }
 
     /// Get remaining balance for a batch from the blockchain with retry logic
-    pub async fn get_remaining_balance(&self, batch_id: &str, max_retries: u32) -> Result<String> {
+    pub async fn get_remaining_balance(
+        &self,
+        batch_id: &str,
+        max_retries: u32,
+        initial_delay_ms: u64,
+    ) -> Result<String> {
         use crate::contracts::{PostageStamp, POSTAGE_STAMP_ADDRESS};
         use alloy::primitives::{Address, FixedBytes};
-        use tokio::time::{sleep, Duration};
 
         let contract_address = Address::from_str(POSTAGE_STAMP_ADDRESS)
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {}", e)))?;
@@ -416,32 +525,20 @@ impl BlockchainClient {
 
         let contract = PostageStamp::new(contract_address, &self.provider);
 
-        // Retry with exponential backoff for rate limit errors
-        let mut retries = 0;
-
-        loop {
-            match contract.remainingBalance(batch_id_bytes).call().await {
-                Ok(balance) => return Ok(balance._0.to_string()),
-                Err(e) => {
-                    let error_msg = e.to_string();
-
-                    // Check if it's a rate limit error (429)
-                    if error_msg.contains("429") || error_msg.contains("Too Many Requests") {
-                        if retries < max_retries {
-                            // Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms, etc.
-                            let delay_ms = 100 * 2u64.pow(retries);
-                            tracing::debug!("Rate limited, retrying after {}ms (attempt {}/{})", delay_ms, retries + 1, max_retries);
-                            sleep(Duration::from_millis(delay_ms)).await;
-                            retries += 1;
-                            continue;
-                        }
-                    }
-
-                    // For other errors or max retries exceeded, return the error
-                    return Err(StampError::Rpc(format!("Failed to get remaining balance: {}", e)));
-                }
-            }
-        }
+        // Use retry_with_backoff helper for rate limit handling
+        tracing::debug!("RPC: remainingBalance(batch_id={})", batch_id);
+        Self::retry_with_backoff(
+            || async {
+                contract
+                    .remainingBalance(batch_id_bytes)
+                    .call()
+                    .await
+                    .map(|balance| balance._0.to_string())
+            },
+            max_retries,
+            initial_delay_ms,
+        )
+        .await
     }
 
     /// Fetch batch information for BatchCreated events

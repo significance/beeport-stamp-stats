@@ -368,8 +368,8 @@ impl Cache {
         Ok((chunk_count, total_events))
     }
 
-    /// Get cached batch balance if available and not too old (within 100 blocks)
-    pub async fn get_cached_balance(&self, batch_id: &str, current_block: u64) -> Result<Option<String>> {
+    /// Get cached batch balance if available and not too old
+    pub async fn get_cached_balance(&self, batch_id: &str, current_block: u64, validity_blocks: u64) -> Result<Option<String>> {
         let row = sqlx::query(
             "SELECT remaining_balance, fetched_block FROM batch_balances WHERE batch_id = ?",
         )
@@ -379,8 +379,8 @@ impl Cache {
 
         if let Some(row) = row {
             let fetched_block: i64 = row.get("fetched_block");
-            // Consider cache valid if fetched within last 100 blocks (~8 minutes at 5s/block)
-            if current_block.saturating_sub(fetched_block as u64) < 100 {
+            // Consider cache valid if fetched within the specified validity period
+            if current_block.saturating_sub(fetched_block as u64) < validity_blocks {
                 return Ok(Some(row.get("remaining_balance")));
             }
         }

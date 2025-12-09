@@ -27,6 +27,10 @@ pub struct Cli {
     #[arg(long, env = "CACHE_DB", default_value = "./stamp-cache.db")]
     pub cache_db: PathBuf,
 
+    /// Enable verbose logging (shows all RPC requests)
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -34,8 +38,12 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Fetch postage stamp events from the blockchain and cache them
+    ///
+    /// Fetches events from both PostageStamp and StampsRegistry contracts.
+    /// By default, starts from the earliest contract deployment block (37,000,000).
+    /// Use --incremental to only fetch new events since the last run.
     Fetch {
-        /// Start block number (defaults to contract deployment block)
+        /// Start block number (defaults to PostageStamp deployment at block 37,000,000)
         #[arg(long)]
         from_block: Option<u64>,
 
@@ -43,9 +51,17 @@ pub enum Commands {
         #[arg(long)]
         to_block: Option<u64>,
 
-        /// Only fetch new events since last run
+        /// Only fetch new events since last run (resumes from last cached block)
         #[arg(long, default_value = "false")]
         incremental: bool,
+
+        /// Maximum number of retries for rate-limited requests
+        #[arg(long, default_value = "5")]
+        max_retries: u32,
+
+        /// Initial delay in milliseconds for exponential backoff (doubles each retry)
+        #[arg(long, default_value = "100")]
+        initial_delay_ms: u64,
     },
 
     /// Display summary statistics from cached data
@@ -161,6 +177,10 @@ pub enum Commands {
         /// Hide batches with zero balance (show only active batches)
         #[arg(long, default_value = "false")]
         hide_zero_balance: bool,
+
+        /// Cache validity in blocks (default: 518400 blocks = ~1 month at 5s/block)
+        #[arg(long, default_value = "518400")]
+        cache_validity_blocks: u64,
     },
 
     /// Get current storage price from the blockchain
@@ -195,6 +215,10 @@ pub enum Commands {
         /// Maximum number of retries for rate-limited requests
         #[arg(long, default_value = "20")]
         max_retries: u32,
+
+        /// Cache validity in blocks (default: 518400 blocks = ~1 month at 5s/block)
+        #[arg(long, default_value = "518400")]
+        cache_validity_blocks: u64,
     },
 }
 
@@ -272,6 +296,7 @@ pub enum TimePeriod {
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum BatchStatusSortBy {
     BatchId,
+    Depth,
     Ttl,
     Expiry,
     Size,
@@ -303,9 +328,18 @@ impl Cli {
                 from_block,
                 to_block,
                 incremental,
+                max_retries,
+                initial_delay_ms,
             } => {
-                self.execute_fetch(cache, *from_block, *to_block, *incremental)
-                    .await
+                self.execute_fetch(
+                    cache,
+                    *from_block,
+                    *to_block,
+                    *incremental,
+                    *max_retries,
+                    *initial_delay_ms,
+                )
+                .await
             }
             Commands::Summary {
                 group_by,
@@ -367,6 +401,7 @@ impl Cli {
                 only_missing,
                 max_retries,
                 hide_zero_balance,
+                cache_validity_blocks,
             } => {
                 self.execute_batch_status(
                     cache,
@@ -378,6 +413,7 @@ impl Cli {
                     *only_missing,
                     *max_retries,
                     *hide_zero_balance,
+                    *cache_validity_blocks,
                 )
                 .await
             }
@@ -389,6 +425,7 @@ impl Cli {
                 price_change,
                 refresh,
                 max_retries,
+                cache_validity_blocks,
             } => {
                 self.execute_expiry_analytics(
                     cache,
@@ -399,6 +436,7 @@ impl Cli {
                     price_change.clone(),
                     *refresh,
                     *max_retries,
+                    *cache_validity_blocks,
                 )
                 .await
             }
@@ -411,6 +449,8 @@ impl Cli {
         from_block: Option<u64>,
         to_block: Option<u64>,
         incremental: bool,
+        max_retries: u32,
+        initial_delay_ms: u64,
     ) -> Result<()> {
         tracing::info!("Fetching events from blockchain...");
 
@@ -441,7 +481,9 @@ impl Cli {
         );
 
         // Fetch and display events
-        let events = client.fetch_batch_events(from, to, &cache).await?;
+        let events = client
+            .fetch_batch_events(from, to, &cache, max_retries, initial_delay_ms)
+            .await?;
 
         tracing::info!("Found {} events", events.len());
 
@@ -607,7 +649,7 @@ impl Cli {
 
         // Fetch all events up to current block
         let latest_block = client
-            .fetch_batch_events(last_synced_block + 1, u64::MAX, &cache)
+            .fetch_batch_events(last_synced_block + 1, u64::MAX, &cache, 5, 100)
             .await?;
         let current_latest = if !latest_block.is_empty() {
             latest_block.last().unwrap().block_number
@@ -650,7 +692,7 @@ impl Cli {
 
             // Fetch new events since last check
             let new_events = client
-                .fetch_batch_events(last_checked_block + 1, u64::MAX, &cache)
+                .fetch_batch_events(last_checked_block + 1, u64::MAX, &cache, 5, 100)
                 .await?;
 
             if !new_events.is_empty() {
@@ -736,7 +778,7 @@ impl Cli {
         );
 
         // Fetch events
-        let events = client.fetch_batch_events(from, to, &cache).await?;
+        let events = client.fetch_batch_events(from, to, &cache, 5, 100).await?;
 
         if events.is_empty() {
             println!("✅ Database is already up to date!");
@@ -777,9 +819,10 @@ impl Cli {
         only_missing: bool,
         max_retries: u32,
         hide_zero_balance: bool,
+        cache_validity_blocks: u64,
     ) -> Result<()> {
         let client = BlockchainClient::new(&self.rpc_url).await?;
-        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change, refresh, only_missing, max_retries, hide_zero_balance)
+        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change, refresh, only_missing, max_retries, hide_zero_balance, cache_validity_blocks)
             .await
             .map_err(|e| anyhow::anyhow!(e))
     }
@@ -794,6 +837,7 @@ impl Cli {
         price_change: Option<String>,
         refresh: bool,
         max_retries: u32,
+        cache_validity_blocks: u64,
     ) -> Result<()> {
         let client = BlockchainClient::new(&self.rpc_url).await?;
         crate::commands::expiry_analytics::execute(
@@ -806,6 +850,7 @@ impl Cli {
             price_change,
             refresh,
             max_retries,
+            cache_validity_blocks,
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
