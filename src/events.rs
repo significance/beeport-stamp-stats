@@ -68,6 +68,7 @@ pub struct BatchInfo {
     pub immutable: bool,
     pub normalised_balance: String,
     pub created_at: DateTime<Utc>,
+    pub block_number: u64,
 }
 
 #[cfg(test)]

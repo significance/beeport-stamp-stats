@@ -24,7 +24,7 @@ pub struct Cli {
     pub rpc_url: String,
 
     /// Path to the cache database
-    #[arg(long, env = "CACHE_DB", default_value = "./stamp-cache.db")]
+    #[arg(long, short = 'd', alias = "database", env = "CACHE_DB", default_value = "./stamp-cache.db")]
     pub cache_db: PathBuf,
 
     /// Enable verbose logging (shows all RPC requests)

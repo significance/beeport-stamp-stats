@@ -1,7 +1,7 @@
 use crate::error::Result;
 use crate::events::{BatchInfo, EventData, EventType, StampEvent};
 use chrono::{DateTime, Duration, Utc};
-use sqlx::{Row, sqlite::SqlitePool};
+use sqlx::{Row, sqlite::{SqliteConnectOptions, SqlitePool}, migrate::MigrateDatabase};
 use std::path::Path;
 
 #[derive(Clone)]
@@ -12,17 +12,36 @@ pub struct Cache {
 impl Cache {
     /// Create a new cache instance and initialize the database
     pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
-        let db_url = format!("sqlite:{}", db_path.as_ref().display());
+        let path = db_path.as_ref();
 
-        let pool = SqlitePool::connect(&db_url).await?;
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Connect with create_if_missing option
+        let options = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options).await?;
 
         let cache = Self { pool };
-        cache.init_schema().await?;
+        cache.run_migrations().await?;
 
         Ok(cache)
     }
 
-    /// Initialize database schema
+    /// Run database migrations
+    async fn run_migrations(&self) -> Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Initialize database schema (deprecated - kept for compatibility)
+    #[allow(dead_code)]
     async fn init_schema(&self) -> Result<()> {
         sqlx::query(
             r#"
@@ -171,8 +190,8 @@ impl Cache {
             sqlx::query(
                 r#"
                 INSERT OR REPLACE INTO batches
-                (batch_id, owner, depth, bucket_depth, immutable, normalised_balance, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (batch_id, owner, depth, bucket_depth, immutable, normalised_balance, created_at, block_number)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 "#,
             )
             .bind(&batch.batch_id)
@@ -182,6 +201,7 @@ impl Cache {
             .bind(immutable)
             .bind(&batch.normalised_balance)
             .bind(created_at)
+            .bind(batch.block_number as i64)
             .execute(&self.pool)
             .await?;
         }
@@ -265,7 +285,7 @@ impl Cache {
         let rows = sqlx::query(
             r#"
             SELECT batch_id, owner, depth, bucket_depth, immutable,
-                   normalised_balance, created_at
+                   normalised_balance, created_at, block_number
             FROM batches
             WHERE created_at >= ?
             ORDER BY created_at ASC
@@ -279,6 +299,7 @@ impl Cache {
         for row in rows {
             let immutable: i64 = row.get("immutable");
             let created_at: i64 = row.get("created_at");
+            let block_number: i64 = row.get("block_number");
 
             batches.push(BatchInfo {
                 batch_id: row.get("batch_id"),
@@ -288,6 +309,7 @@ impl Cache {
                 immutable: immutable != 0,
                 normalised_balance: row.get("normalised_balance"),
                 created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(|| Utc::now()),
+                block_number: block_number as u64,
             });
         }
 

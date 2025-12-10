@@ -29,6 +29,7 @@ impl BlockchainClient {
     }
 
     /// Helper function to retry an async operation with exponential backoff on rate limit errors
+    /// Uses steeper backoff (4x multiplier) and extended retry with 5-minute waits after exhausting fast retries
     async fn retry_with_backoff<F, Fut, T, E>(
         mut operation: F,
         max_retries: u32,
@@ -41,32 +42,53 @@ impl BlockchainClient {
     {
         use tokio::time::{sleep, Duration};
 
-        let mut retries = 0;
+        let mut extended_retry_count = 0;
+
         loop {
-            match operation().await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    let error_msg = e.to_string();
+            let mut retries = 0;
 
-                    // Check if it's a rate limit error (429)
-                    if (error_msg.contains("429") || error_msg.contains("Too Many Requests"))
-                        && retries < max_retries
-                    {
-                        // Exponential backoff with configurable initial delay
-                        let delay_ms = initial_delay_ms * 2u64.pow(retries);
-                        tracing::debug!(
-                            "Rate limited, retrying after {}ms (attempt {}/{})",
-                            delay_ms,
-                            retries + 1,
-                            max_retries
-                        );
-                        sleep(Duration::from_millis(delay_ms)).await;
-                        retries += 1;
-                        continue;
+            // Fast retry phase with steep exponential backoff
+            loop {
+                match operation().await {
+                    Ok(result) => return Ok(result),
+                    Err(e) => {
+                        let error_msg = e.to_string();
+
+                        // Check if it's a rate limit error (429)
+                        if error_msg.contains("429") || error_msg.contains("Too Many Requests") {
+                            if retries < max_retries {
+                                // Steeper exponential backoff: 4x multiplier instead of 2x
+                                // 100ms, 400ms, 1600ms, 6400ms, 25600ms...
+                                let delay_ms = initial_delay_ms * 4u64.pow(retries);
+                                let now = chrono::Local::now().format("%H:%M:%S");
+                                tracing::debug!(
+                                    "[{}] Rate limited (429), retrying after {}ms (attempt {}/{})",
+                                    now,
+                                    delay_ms,
+                                    retries + 1,
+                                    max_retries
+                                );
+                                sleep(Duration::from_millis(delay_ms)).await;
+                                retries += 1;
+                                continue;
+                            } else {
+                                // Extended retry: wait 5 minutes and try again
+                                extended_retry_count += 1;
+                                let now = chrono::Local::now().format("%H:%M:%S");
+                                tracing::warn!(
+                                    "[{}] Max retries ({}) exhausted. Waiting 5 minutes before retry #{} (extended retry mode)",
+                                    now,
+                                    max_retries,
+                                    extended_retry_count
+                                );
+                                sleep(Duration::from_secs(300)).await; // 5 minutes
+                                break; // Break inner loop to reset retry counter
+                            }
+                        } else {
+                            // Non-rate-limit error
+                            return Err(StampError::Rpc(format!("Operation failed: {}", e)));
+                        }
                     }
-
-                    // For other errors or max retries exceeded, return the error
-                    return Err(StampError::Rpc(format!("Operation failed: {}", e)));
                 }
             }
         }
@@ -238,7 +260,16 @@ impl BlockchainClient {
             // Parse each log
             let chunk_event_count = events.len();
             for log in logs {
-                if let Some(event) = self.parse_log(contract_type, log, &mut block_cache).await? {
+                if let Some(event) = self
+                    .parse_log(
+                        contract_type,
+                        log,
+                        &mut block_cache,
+                        max_retries,
+                        initial_delay_ms,
+                    )
+                    .await?
+                {
                     events.push(event);
                 }
             }
@@ -280,6 +311,8 @@ impl BlockchainClient {
         contract_type: ContractType,
         log: Log,
         block_cache: &mut HashMap<u64, Block>,
+        max_retries: u32,
+        initial_delay_ms: u64,
     ) -> Result<Option<StampEvent>> {
         let block_number = log
             .block_number
@@ -299,12 +332,32 @@ impl BlockchainClient {
             cached_block.clone()
         } else {
             tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
-            let fetched_block = self
-                .provider
-                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to get block: {}", e)))?
-                .ok_or_else(|| StampError::Rpc(format!("Block {} not found", block_number)))?;
+
+            // Wrap get_block_by_number with retry logic
+            let provider = &self.provider;
+            let fetched_block = Self::retry_with_backoff(
+                || async {
+                    let block = provider
+                        .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
+                        .await
+                        .map_err(|e| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                format!("Failed to get block: {}", e),
+                            )
+                        })?
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                format!("Block {} not found", block_number),
+                            )
+                        })?;
+                    Ok::<Block, std::io::Error>(block)
+                },
+                max_retries,
+                initial_delay_ms,
+            )
+            .await?;
 
             // Store in cache for future use
             block_cache.insert(block_number, fetched_block.clone());
@@ -564,6 +617,7 @@ impl BlockchainClient {
                         immutable: *immutable_flag,
                         normalised_balance: normalised_balance.clone(),
                         created_at: event.block_timestamp,
+                        block_number: event.block_number,
                     });
                 }
             }
