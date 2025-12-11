@@ -23,7 +23,11 @@ pub struct Cli {
     #[arg(long, env = "RPC_URL", default_value = "https://rpc.gnosis.gateway.fm")]
     pub rpc_url: String,
 
-    /// Path to the cache database
+    /// Path to the cache database (SQLite file path or PostgreSQL connection string)
+    ///
+    /// Examples:
+    ///   - SQLite: ./stamp-cache.db
+    ///   - PostgreSQL: postgres://user:pass@localhost/stamps
     #[arg(long, short = 'd', alias = "database", env = "CACHE_DB", default_value = "./stamp-cache.db")]
     pub cache_db: PathBuf,
 
