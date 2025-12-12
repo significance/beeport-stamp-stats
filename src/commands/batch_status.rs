@@ -332,6 +332,7 @@ mod tests {
             immutable: false,
             normalised_balance: "240000000".to_string(), // 240M PLUR - reasonable for testing
             created_at: Utc::now(),
+            block_number: 1000,
         };
 
         let price_config = PriceConfig::new(24000);

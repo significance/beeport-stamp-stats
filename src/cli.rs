@@ -44,10 +44,10 @@ pub enum Commands {
     /// Fetch postage stamp events from the blockchain and cache them
     ///
     /// Fetches events from both PostageStamp and StampsRegistry contracts.
-    /// By default, starts from the earliest contract deployment block (37,000,000).
+    /// By default, starts from block 31,305,656 (PostageStamp contract deployment).
     /// Use --incremental to only fetch new events since the last run.
     Fetch {
-        /// Start block number (defaults to PostageStamp deployment at block 37,000,000)
+        /// Start block number (defaults to block 31,305,656)
         #[arg(long)]
         from_block: Option<u64>,
 

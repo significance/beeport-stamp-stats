@@ -28,3 +28,33 @@ pub enum StampError {
 }
 
 pub type Result<T> = std::result::Result<T, StampError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_display() {
+        let err = StampError::Rpc("connection timeout".to_string());
+        assert_eq!(err.to_string(), "RPC error: connection timeout");
+
+        let err = StampError::Contract("invalid signature".to_string());
+        assert_eq!(err.to_string(), "Contract error: invalid signature");
+
+        let err = StampError::Parse("invalid number".to_string());
+        assert_eq!(err.to_string(), "Parse error: invalid number");
+    }
+
+    #[test]
+    fn test_error_conversion() {
+        // Test that std::io::Error converts to StampError::Io
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let stamp_err: StampError = io_err.into();
+        assert!(matches!(stamp_err, StampError::Io(_)));
+
+        // Test that serde_json::Error converts to StampError::Serialization
+        let json_err = serde_json::from_str::<i32>("not a number").unwrap_err();
+        let stamp_err: StampError = json_err.into();
+        assert!(matches!(stamp_err, StampError::Serialization(_)));
+    }
+}

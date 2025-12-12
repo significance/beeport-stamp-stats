@@ -228,6 +228,7 @@ mod tests {
             immutable: false,
             normalised_balance: "500000000000000000".to_string(),
             created_at: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
+            block_number: 1000,
         }];
 
         let temp_file = NamedTempFile::new().unwrap();
@@ -248,6 +249,7 @@ mod tests {
             immutable: false,
             normalised_balance: "500000000000000000".to_string(),
             created_at: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
+            block_number: 1000,
         }];
 
         let temp_file = NamedTempFile::new().unwrap();

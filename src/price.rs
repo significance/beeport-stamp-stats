@@ -106,6 +106,7 @@ impl PriceConfig {
     }
 
     /// Parse price from string (PLUR units)
+    #[allow(dead_code)]
     pub fn parse_price(s: &str) -> Result<u128> {
         u128::from_str(s)
             .map_err(|_| StampError::Parse("Invalid price value".to_string()))
@@ -114,6 +115,7 @@ impl PriceConfig {
     /// Get the effective price for a given TTL
     /// If price change is configured, returns the average price over the TTL period
     /// Otherwise, returns the base price
+    #[allow(dead_code)]
     pub fn effective_price(&self, ttl_days: f64) -> u128 {
         match &self.price_change {
             Some(change) => change.average_price(self.base_price, ttl_days),
@@ -160,6 +162,7 @@ pub fn blocks_to_days(blocks: u64) -> f64 {
 }
 
 /// Calculate days to blocks
+#[allow(dead_code)]
 pub fn days_to_blocks(days: f64) -> u64 {
     const SECONDS_PER_BLOCK: f64 = 5.0;
     const SECONDS_PER_DAY: f64 = 86400.0;
