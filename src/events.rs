@@ -70,6 +70,71 @@ pub struct BatchInfo {
     pub block_number: u64,
 }
 
+// ============================================================================
+// Storage Incentives Events (PriceOracle, StakeRegistry, Redistribution)
+// ============================================================================
+
+/// Unified event type for storage incentives contracts
+/// Covers PriceOracle, StakeRegistry, and Redistribution events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageIncentivesEvent {
+    // Core event metadata (always present)
+    pub block_number: u64,
+    pub block_timestamp: DateTime<Utc>,
+    pub transaction_hash: String,
+    pub log_index: u64,
+    pub contract_source: String,  // 'PriceOracle', 'StakeRegistry', 'Redistribution'
+    pub event_type: String,
+
+    // Calculated/derived fields
+    pub round_number: Option<u64>,   // block_number / 152
+    pub phase: Option<String>,       // 'commit', 'reveal', 'claim' (for redistribution)
+
+    // Common identity fields
+    pub owner_address: Option<String>,
+    pub overlay: Option<String>,
+
+    // PriceOracle specific
+    pub price: Option<String>,
+
+    // StakeRegistry specific
+    pub committed_stake: Option<String>,
+    pub potential_stake: Option<String>,
+    pub height: Option<u8>,
+    pub slash_amount: Option<String>,
+    pub freeze_time: Option<String>,
+    pub withdraw_amount: Option<String>,
+
+    // Redistribution specific - Commit/Reveal data
+    pub stake: Option<String>,
+    pub stake_density: Option<String>,
+    pub reserve_commitment: Option<String>,
+    pub depth: Option<u8>,
+
+    // Redistribution specific - Claim phase data
+    pub anchor: Option<String>,
+    pub truth_hash: Option<String>,
+    pub truth_depth: Option<u8>,
+
+    // Redistribution specific - Winner data
+    pub winner_overlay: Option<String>,
+    pub winner_owner: Option<String>,
+    pub winner_depth: Option<u8>,
+    pub winner_stake: Option<String>,
+    pub winner_stake_density: Option<String>,
+    pub winner_hash: Option<String>,
+
+    // Redistribution specific - Statistics
+    pub commit_count: Option<u64>,
+    pub reveal_count: Option<u64>,
+    pub chunk_count: Option<u64>,
+    pub redundancy_count: Option<u16>,
+
+    // Redistribution specific - Chunk proofs
+    pub chunk_index_in_rc: Option<u64>,
+    pub chunk_address: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

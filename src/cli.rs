@@ -7,7 +7,7 @@ use crate::{
     blockchain::BlockchainClient,
     cache::Cache,
     config::AppConfig,
-    contracts::{abi::DEFAULT_START_BLOCK, ContractRegistry},
+    contracts::{abi::DEFAULT_START_BLOCK, ContractRegistry, StorageIncentivesContractRegistry},
     display,
     events::EventType,
     export,
@@ -365,8 +365,9 @@ impl Cli {
         // Resolve configuration
         let config = self.resolve_config()?;
 
-        // Build contract registry from configuration
+        // Build contract registries from configuration
         let registry = ContractRegistry::from_config(&config)?;
+        let si_registry = StorageIncentivesContractRegistry::from_config(&config)?;
 
         // Initialize blockchain client
         let client = BlockchainClient::new(&config.rpc.url).await?;
@@ -386,6 +387,7 @@ impl Cli {
                     cache,
                     client,
                     &registry,
+                    &si_registry,
                     &config,
                     *from_block,
                     *to_block,
@@ -516,6 +518,7 @@ impl Cli {
         cache: Cache,
         client: BlockchainClient,
         registry: &ContractRegistry,
+        si_registry: &StorageIncentivesContractRegistry,
         config: &AppConfig,
         from_block: Option<u64>,
         to_block: Option<u64>,
@@ -546,7 +549,7 @@ impl Cli {
             }
         );
 
-        // Fetch and display events with incremental storage
+        // Fetch and display postage stamp events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
         let events = client
@@ -569,7 +572,7 @@ impl Cli {
                         cache.store_batches(&batches).await?;
 
                         tracing::debug!(
-                            "Stored {} events and {} batches from chunk",
+                            "Stored {} postage stamp events and {} batches from chunk",
                             chunk_events.len(),
                             batches.len()
                         );
@@ -580,10 +583,42 @@ impl Cli {
             )
             .await?;
 
-        tracing::info!("Found {} total events", events.len());
+        tracing::info!("Found {} total postage stamp events", events.len());
 
-        // Display events in markdown table
+        // Fetch and display storage incentives events with incremental storage
+        let cache_clone = cache.clone();
+        let si_events = client
+            .fetch_storage_incentives_events(
+                from,
+                to,
+                &cache,
+                si_registry,
+                &config.blockchain,
+                &config.retry,
+                |chunk_events: Vec<crate::events::StorageIncentivesEvent>| {
+                    let cache = cache_clone.clone();
+                    async move {
+                        // Store storage incentives events from this chunk
+                        cache.store_storage_incentives_events(&chunk_events).await?;
+
+                        tracing::debug!(
+                            "Stored {} storage incentives events from chunk",
+                            chunk_events.len()
+                        );
+
+                        Ok(())
+                    }
+                },
+            )
+            .await?;
+
+        tracing::info!("Found {} total storage incentives events", si_events.len());
+
+        // Display postage stamp events in markdown table
         display::display_events(&events)?;
+
+        // TODO: Display storage incentives events (for now just log count)
+        tracing::info!("Storage incentives events: {} (not displayed yet)", si_events.len());
 
         Ok(())
     }

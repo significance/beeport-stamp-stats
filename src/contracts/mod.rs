@@ -7,16 +7,20 @@
 ///
 /// - `Contract` trait: Defines the interface all contracts must implement
 /// - `ContractRegistry`: Manages multiple contracts and provides lookup
-/// - `impls`: Concrete contract implementations (PostageStamp, StampsRegistry)
+/// - `StorageIncentivesContract` trait: For storage incentives contracts
+/// - `impls`: Concrete contract implementations
 /// - `parser`: Generic event parsing logic (eliminates duplication)
 /// - `abi`: Contract ABIs using sol! macro
 pub mod abi;
 pub mod impls;
 pub mod parser;
 
+// Contract implementations are available in the impls module
+// They are instantiated through the registry rather than being used directly
+
 use crate::config::AppConfig;
 use crate::error::Result;
-use crate::events::StampEvent;
+use crate::events::{StampEvent, StorageIncentivesEvent};
 use alloy::primitives::TxHash;
 use alloy::rpc::types::Log;
 use chrono::{DateTime, Utc};
@@ -97,6 +101,33 @@ pub trait Contract: Send + Sync {
     fn supports_balance_query(&self) -> bool {
         false
     }
+}
+
+/// Trait defining storage incentives contract behavior
+///
+/// Storage incentives contracts (PriceOracle, StakeRegistry, Redistribution)
+/// emit different event types than postage stamp contracts.
+///
+/// This trait is similar to Contract but returns StorageIncentivesEvent.
+pub trait StorageIncentivesContract: Send + Sync {
+    /// Contract name (e.g., "PriceOracle")
+    fn name(&self) -> &str;
+
+    /// Contract address on blockchain (hex string with 0x prefix)
+    fn address(&self) -> &str;
+
+    /// Block number when contract was deployed
+    fn deployment_block(&self) -> u64;
+
+    /// Parse a raw log into a StorageIncentivesEvent
+    fn parse_log(
+        &self,
+        log: Log,
+        block_number: u64,
+        block_timestamp: DateTime<Utc>,
+        transaction_hash: TxHash,
+        log_index: u64,
+    ) -> Result<Option<StorageIncentivesEvent>>;
 }
 
 /// Registry to manage all active contracts
@@ -222,24 +253,28 @@ impl ContractRegistry {
         let mut registry = Self::new();
 
         for contract_config in &config.contracts {
-            let contract: Box<dyn Contract> = match contract_config.contract_type.as_str() {
-                "PostageStamp" => Box::new(impls::PostageStampContract::new(
+            let contract: Option<Box<dyn Contract>> = match contract_config.contract_type.as_str() {
+                "PostageStamp" => Some(Box::new(impls::PostageStampContract::new(
                     contract_config.address.clone(),
                     contract_config.deployment_block,
-                )),
-                "StampsRegistry" => Box::new(impls::StampsRegistryContract::new(
+                ))),
+                "StampsRegistry" => Some(Box::new(impls::StampsRegistryContract::new(
                     contract_config.address.clone(),
                     contract_config.deployment_block,
-                )),
+                ))),
+                // Skip storage incentives contracts (handled by StorageIncentivesContractRegistry)
+                "PriceOracle" | "StakeRegistry" | "Redistribution" => None,
                 _ => {
                     return Err(crate::error::StampError::Config(format!(
-                        "Unknown contract type '{}' for contract '{}'. Valid types: PostageStamp, StampsRegistry",
+                        "Unknown contract type '{}' for contract '{}'. Valid types: PostageStamp, StampsRegistry, PriceOracle, StakeRegistry, Redistribution",
                         contract_config.contract_type, contract_config.name
                     )))
                 }
             };
 
-            registry.register(contract);
+            if let Some(contract) = contract {
+                registry.register(contract);
+            }
         }
 
         Ok(registry)
@@ -247,6 +282,95 @@ impl ContractRegistry {
 }
 
 impl Default for ContractRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Registry to manage all active storage incentives contracts
+///
+/// Similar to ContractRegistry but for storage incentives contracts
+/// (PriceOracle, StakeRegistry, Redistribution) that emit different event types.
+pub struct StorageIncentivesContractRegistry {
+    contracts: Vec<Box<dyn StorageIncentivesContract>>,
+}
+
+impl std::fmt::Debug for StorageIncentivesContractRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageIncentivesContractRegistry")
+            .field("contracts", &self.contracts.iter().map(|c| c.name()).collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+impl StorageIncentivesContractRegistry {
+    /// Create a new empty registry
+    pub fn new() -> Self {
+        Self {
+            contracts: Vec::new(),
+        }
+    }
+
+    /// Register a storage incentives contract
+    pub fn register(&mut self, contract: Box<dyn StorageIncentivesContract>) {
+        self.contracts.push(contract);
+    }
+
+    /// Get all registered contracts
+    pub fn all(&self) -> &[Box<dyn StorageIncentivesContract>] {
+        &self.contracts
+    }
+
+    /// Find a contract by name
+    #[allow(dead_code)]
+    pub fn find_by_name(&self, name: &str) -> Option<&dyn StorageIncentivesContract> {
+        self.contracts
+            .iter()
+            .find(|c| c.name() == name)
+            .map(|b| b.as_ref())
+    }
+
+    /// Build a registry from configuration
+    ///
+    /// Extracts PriceOracle, StakeRegistry, and Redistribution contracts from config.
+    pub fn from_config(config: &AppConfig) -> Result<Self> {
+        let mut registry = Self::new();
+
+        for contract_config in &config.contracts {
+            let contract: Option<Box<dyn StorageIncentivesContract>> =
+                match contract_config.contract_type.as_str() {
+                    "PriceOracle" => Some(Box::new(impls::PriceOracleContract::new(
+                        contract_config.address.clone(),
+                        contract_config.deployment_block,
+                    ))),
+                    "StakeRegistry" => Some(Box::new(impls::StakeRegistryContract::new(
+                        contract_config.address.clone(),
+                        contract_config.deployment_block,
+                    ))),
+                    "Redistribution" => Some(Box::new(impls::RedistributionContract::new(
+                        contract_config.address.clone(),
+                        contract_config.deployment_block,
+                    ))),
+                    // Skip non-storage-incentives contracts
+                    "PostageStamp" | "StampsRegistry" => None,
+                    _ => {
+                        return Err(crate::error::StampError::Config(format!(
+                            "Unknown contract type '{}' for contract '{}'. Valid types: PostageStamp, StampsRegistry, PriceOracle, StakeRegistry, Redistribution",
+                            contract_config.contract_type, contract_config.name
+                        )))
+                    }
+                };
+
+            if let Some(contract) = contract {
+                registry.register(contract);
+            }
+        }
+
+        Ok(registry)
+    }
+}
+
+impl Default for StorageIncentivesContractRegistry {
     fn default() -> Self {
         Self::new()
     }
@@ -293,6 +417,21 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Unknown contract type"));
+    }
+
+    #[test]
+    fn test_storage_incentives_registry_from_config() {
+        let config = AppConfig::default();
+        let registry = StorageIncentivesContractRegistry::from_config(&config).unwrap();
+
+        // Default config has 3 storage incentives contracts
+        assert_eq!(registry.all().len(), 3);
+
+        // Find by name
+        assert!(registry.find_by_name("PriceOracle").is_some());
+        assert!(registry.find_by_name("StakeRegistry").is_some());
+        assert!(registry.find_by_name("Redistribution").is_some());
+        assert!(registry.find_by_name("PostageStamp").is_none());
     }
 
     #[test]

@@ -16,7 +16,7 @@ fn test_default_config() {
     assert_eq!(config.database.path, "./stamp-cache.db");
     assert_eq!(config.blockchain.chunk_size, 10000);
     assert_eq!(config.blockchain.block_time_seconds, 5.0);
-    assert_eq!(config.contracts.len(), 2);
+    assert_eq!(config.contracts.len(), 5);
     assert_eq!(config.retry.max_retries, 5);
     assert_eq!(config.retry.initial_delay_ms, 100);
     assert_eq!(config.retry.backoff_multiplier, 4);

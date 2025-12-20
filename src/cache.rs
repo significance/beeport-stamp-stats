@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::events::{BatchInfo, EventData, EventType, StampEvent};
+use crate::events::{BatchInfo, EventData, EventType, StampEvent, StorageIncentivesEvent};
 use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 use std::path::Path;
@@ -170,6 +170,162 @@ impl Cache {
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
                     .bind(&data)
+                    .execute(pool)
+                    .await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store storage incentives events in the database
+    /// Handles PriceOracle, StakeRegistry, and Redistribution events
+    pub async fn store_storage_incentives_events(&self, events: &[StorageIncentivesEvent]) -> Result<()> {
+        for event in events {
+            let timestamp = event.block_timestamp.timestamp();
+
+            match &self.pool {
+                DatabasePool::Sqlite(pool) => {
+                    sqlx::query(
+                        r#"
+                        INSERT OR REPLACE INTO storage_incentives_events
+                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, event_type,
+                         round_number, phase, owner_address, overlay,
+                         price, committed_stake, potential_stake, height, slash_amount, freeze_time, withdraw_amount,
+                         stake, stake_density, reserve_commitment, depth,
+                         anchor, truth_hash, truth_depth,
+                         winner_overlay, winner_owner, winner_depth, winner_stake, winner_stake_density, winner_hash,
+                         commit_count, reveal_count, chunk_count, redundancy_count,
+                         chunk_index_in_rc, chunk_address)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        "#,
+                    )
+                    .bind(event.block_number as i64)
+                    .bind(timestamp)
+                    .bind(&event.transaction_hash)
+                    .bind(event.log_index as i64)
+                    .bind(&event.contract_source)
+                    .bind(&event.event_type)
+                    .bind(event.round_number.map(|v| v as i64))
+                    .bind(&event.phase)
+                    .bind(&event.owner_address)
+                    .bind(&event.overlay)
+                    .bind(&event.price)
+                    .bind(&event.committed_stake)
+                    .bind(&event.potential_stake)
+                    .bind(event.height.map(|v| v as i64))
+                    .bind(&event.slash_amount)
+                    .bind(&event.freeze_time)
+                    .bind(&event.withdraw_amount)
+                    .bind(&event.stake)
+                    .bind(&event.stake_density)
+                    .bind(&event.reserve_commitment)
+                    .bind(event.depth.map(|v| v as i64))
+                    .bind(&event.anchor)
+                    .bind(&event.truth_hash)
+                    .bind(event.truth_depth.map(|v| v as i64))
+                    .bind(&event.winner_overlay)
+                    .bind(&event.winner_owner)
+                    .bind(event.winner_depth.map(|v| v as i64))
+                    .bind(&event.winner_stake)
+                    .bind(&event.winner_stake_density)
+                    .bind(&event.winner_hash)
+                    .bind(event.commit_count.map(|v| v as i64))
+                    .bind(event.reveal_count.map(|v| v as i64))
+                    .bind(event.chunk_count.map(|v| v as i64))
+                    .bind(event.redundancy_count.map(|v| v as i64))
+                    .bind(event.chunk_index_in_rc.map(|v| v as i64))
+                    .bind(&event.chunk_address)
+                    .execute(pool)
+                    .await?;
+                }
+                DatabasePool::Postgres(pool) => {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO storage_incentives_events
+                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, event_type,
+                         round_number, phase, owner_address, overlay,
+                         price, committed_stake, potential_stake, height, slash_amount, freeze_time, withdraw_amount,
+                         stake, stake_density, reserve_commitment, depth,
+                         anchor, truth_hash, truth_depth,
+                         winner_overlay, winner_owner, winner_depth, winner_stake, winner_stake_density, winner_hash,
+                         commit_count, reveal_count, chunk_count, redundancy_count,
+                         chunk_index_in_rc, chunk_address)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+                        ON CONFLICT (transaction_hash, log_index) DO UPDATE SET
+                            block_number = EXCLUDED.block_number,
+                            block_timestamp = EXCLUDED.block_timestamp,
+                            contract_source = EXCLUDED.contract_source,
+                            event_type = EXCLUDED.event_type,
+                            round_number = EXCLUDED.round_number,
+                            phase = EXCLUDED.phase,
+                            owner_address = EXCLUDED.owner_address,
+                            overlay = EXCLUDED.overlay,
+                            price = EXCLUDED.price,
+                            committed_stake = EXCLUDED.committed_stake,
+                            potential_stake = EXCLUDED.potential_stake,
+                            height = EXCLUDED.height,
+                            slash_amount = EXCLUDED.slash_amount,
+                            freeze_time = EXCLUDED.freeze_time,
+                            withdraw_amount = EXCLUDED.withdraw_amount,
+                            stake = EXCLUDED.stake,
+                            stake_density = EXCLUDED.stake_density,
+                            reserve_commitment = EXCLUDED.reserve_commitment,
+                            depth = EXCLUDED.depth,
+                            anchor = EXCLUDED.anchor,
+                            truth_hash = EXCLUDED.truth_hash,
+                            truth_depth = EXCLUDED.truth_depth,
+                            winner_overlay = EXCLUDED.winner_overlay,
+                            winner_owner = EXCLUDED.winner_owner,
+                            winner_depth = EXCLUDED.winner_depth,
+                            winner_stake = EXCLUDED.winner_stake,
+                            winner_stake_density = EXCLUDED.winner_stake_density,
+                            winner_hash = EXCLUDED.winner_hash,
+                            commit_count = EXCLUDED.commit_count,
+                            reveal_count = EXCLUDED.reveal_count,
+                            chunk_count = EXCLUDED.chunk_count,
+                            redundancy_count = EXCLUDED.redundancy_count,
+                            chunk_index_in_rc = EXCLUDED.chunk_index_in_rc,
+                            chunk_address = EXCLUDED.chunk_address
+                        "#,
+                    )
+                    .bind(event.block_number as i64)
+                    .bind(timestamp)
+                    .bind(&event.transaction_hash)
+                    .bind(event.log_index as i64)
+                    .bind(&event.contract_source)
+                    .bind(&event.event_type)
+                    .bind(event.round_number.map(|v| v as i64))
+                    .bind(&event.phase)
+                    .bind(&event.owner_address)
+                    .bind(&event.overlay)
+                    .bind(&event.price)
+                    .bind(&event.committed_stake)
+                    .bind(&event.potential_stake)
+                    .bind(event.height.map(|v| v as i64))
+                    .bind(&event.slash_amount)
+                    .bind(&event.freeze_time)
+                    .bind(&event.withdraw_amount)
+                    .bind(&event.stake)
+                    .bind(&event.stake_density)
+                    .bind(&event.reserve_commitment)
+                    .bind(event.depth.map(|v| v as i64))
+                    .bind(&event.anchor)
+                    .bind(&event.truth_hash)
+                    .bind(event.truth_depth.map(|v| v as i64))
+                    .bind(&event.winner_overlay)
+                    .bind(&event.winner_owner)
+                    .bind(event.winner_depth.map(|v| v as i64))
+                    .bind(&event.winner_stake)
+                    .bind(&event.winner_stake_density)
+                    .bind(&event.winner_hash)
+                    .bind(event.commit_count.map(|v| v as i64))
+                    .bind(event.reveal_count.map(|v| v as i64))
+                    .bind(event.chunk_count.map(|v| v as i64))
+                    .bind(event.redundancy_count.map(|v| v as i64))
+                    .bind(event.chunk_index_in_rc.map(|v| v as i64))
+                    .bind(&event.chunk_address)
                     .execute(pool)
                     .await?;
                 }

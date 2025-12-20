@@ -231,7 +231,7 @@ fn format_event_details(data: &EventData) -> String {
             )
         }
         EventData::BatchTopUp { topup_amount, .. } => {
-            format!("Top-up: {} PLUR", format_amount(topup_amount))
+            format!("Top-up: {} BZZ", format_amount(topup_amount))
         }
         EventData::BatchDepthIncrease { new_depth, .. } => {
             format!("New Depth: {new_depth}")

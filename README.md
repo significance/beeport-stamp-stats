@@ -6,18 +6,77 @@ A high-performance Rust CLI tool for tracking and analyzing Swarm postage stamp 
 
 This tool provides real-time tracking and historical analysis of postage stamp batch events from the Swarm network's PostageStamp contract on Gnosis Chain. Built with modern Rust (2024 edition) and the Alloy framework, it offers efficient blockchain querying, SQLite caching, and beautiful markdown-formatted output.
 
+## Quick Start
+
+Get up and running in 3 steps:
+
+```bash
+# 1. Build the release binary
+cargo build --release
+
+# 2. Fetch events from all 5 contracts (PostageStamp, StampsRegistry, PriceOracle, StakeRegistry, Redistribution)
+./target/release/beeport-stamp-stats fetch --from-block 41105000 --to-block 41106000
+
+# 3. View batch status with TTL and expiry dates
+./target/release/beeport-stamp-stats batch-status --sort-by ttl
+```
+
+**What you'll get:**
+- ✅ All postage stamp events (BatchCreated, BatchTopUp, BatchDepthIncrease)
+- ✅ Storage incentives events (PriceUpdate, StakeUpdated, Redistribution game events)
+- ✅ Batch TTL and expiry predictions
+- ✅ SQLite cache for instant future queries
+
+**Common workflows:**
+
+```bash
+# Initial historical sync (fetches all events from contract deployment)
+./target/release/beeport-stamp-stats fetch
+
+# Daily updates (only fetch new events)
+./target/release/beeport-stamp-stats sync
+
+# Monitor blockchain in real-time
+./target/release/beeport-stamp-stats follow
+
+# View activity summary
+./target/release/beeport-stamp-stats summary --group-by week --months 3
+
+# Analyze batch expirations
+./target/release/beeport-stamp-stats expiry-analytics --period week
+
+# Export data for analysis
+./target/release/beeport-stamp-stats export --output events.csv --format csv
+```
+
+**Storage Incentives Analytics:**
+
+The tool now tracks storage incentives contracts for comprehensive Swarm network analysis:
+
+```bash
+# Price history analysis (PriceOracle events)
+sqlite3 stamp-cache.db "SELECT round_number, price, block_timestamp FROM storage_incentives_events WHERE event_type='PriceUpdate' ORDER BY block_number DESC LIMIT 20"
+
+# Redistribution game participation (Redistribution events)
+sqlite3 stamp-cache.db "SELECT event_type, COUNT(*) FROM storage_incentives_events WHERE contract_source='Redistribution' GROUP BY event_type"
+
+# Node staking activity (StakeRegistry events)
+sqlite3 stamp-cache.db "SELECT owner_address, COUNT(*) as updates FROM storage_incentives_events WHERE event_type='StakeUpdated' GROUP BY owner_address ORDER BY updates DESC LIMIT 10"
+```
+
 ## Features
 
 ### Core Capabilities
 - **Direct RPC Access**: Uses Ethereum RPC directly instead of third-party APIs for reliable, rate-limit-free access
-- **Multi-Contract Support**: Monitor multiple contracts simultaneously
-  - PostageStamp contract (direct stamp purchases)
-  - StampsRegistry contract (UI-based stamp purchases)
-  - Easy to extend with additional contracts
-- **Event Tracking**: Monitors all PostageStamp contract events:
-  - `BatchCreated` - New postage batch creation
-  - `BatchTopUp` - Batch balance increases
-  - `BatchDepthIncrease` - Batch storage depth expansions
+- **Multi-Contract Support**: Monitor 5 contracts simultaneously
+  - **PostageStamp** - Direct stamp purchases
+  - **StampsRegistry** - UI-based stamp purchases with payer tracking
+  - **PriceOracle** - Dynamic price adjustments (storage cost tracking)
+  - **StakeRegistry** - Node staking for redistribution game
+  - **Redistribution** - Schelling coordination game for storage incentives
+- **Comprehensive Event Tracking**:
+  - **Postage Stamps**: BatchCreated, BatchTopUp, BatchDepthIncrease
+  - **Storage Incentives**: PriceUpdate, StakeUpdated, StakeSlashed, StakeFrozen, Committed, Revealed, WinnerSelected, and more (18 event types total)
 - **Contract-Specific Hooks**: Generic hook system for custom event handling per contract
 - **SQLite Caching**: Persistent local database for fast historical queries
 - **Beautiful Output**: Markdown-formatted tables for easy reading
@@ -67,23 +126,40 @@ Beeport Stamp Stats supports flexible configuration through multiple sources wit
 
 **Priority Order:** CLI arguments > Environment variables > Config file > Built-in defaults
 
-### Configuration File
+### Configuration File Formats
 
-Create a `config.yaml` (or `.toml`, `.json`) file to customize settings:
+The tool supports **YAML**, **TOML**, and **JSON** configuration files. Choose the format you prefer:
+
+#### YAML Format (config.yaml)
 
 ```yaml
+# Beeport Stamp Stats Configuration
+# ==================================
+# All settings are optional - the tool has sensible defaults for everything.
+# Priority: CLI arguments > Environment variables > Config file > Built-in defaults
+
+# RPC Configuration
 rpc:
   url: "https://rpc.gnosis.gateway.fm"
+  # Alternative endpoints:
+  # - https://rpc.gnosischain.com
+  # - https://gnosis-pokt.nodies.app
+  # - https://gnosis.drpc.org
 
+# Database Configuration
 database:
   path: "./stamp-cache.db"
   # For PostgreSQL: "postgres://user:pass@localhost/stamps"
+  # For PostgreSQL with SSL: "postgres://user:pass@db.example.com:5432/stamps?sslmode=require"
 
+# Blockchain Configuration
 blockchain:
-  chunk_size: 10000          # Blocks per RPC chunk
-  block_time_seconds: 5.0    # Gnosis Chain block time
+  chunk_size: 10000          # Blocks per RPC chunk (larger = fewer calls, may hit limits)
+  block_time_seconds: 5.0    # Gnosis Chain block time (used for TTL calculations)
 
+# Contract Configuration (all 5 contracts)
 contracts:
+  # Postage Stamp Contracts
   - name: "PostageStamp"
     contract_type: "PostageStamp"
     address: "0x45a1502382541Cd610CC9068e88727426b696293"
@@ -94,11 +170,151 @@ contracts:
     address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
     deployment_block: 42390510
 
+  # Storage Incentives Contracts
+  - name: "PriceOracle"
+    contract_type: "PriceOracle"
+    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+    deployment_block: 37339168
+
+  - name: "StakeRegistry"
+    contract_type: "StakeRegistry"
+    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+    deployment_block: 40430237
+
+  - name: "Redistribution"
+    contract_type: "Redistribution"
+    address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+    deployment_block: 41105199
+
+# Retry Configuration (for rate-limited RPC calls)
 retry:
-  max_retries: 5
-  initial_delay_ms: 100
-  backoff_multiplier: 4
-  extended_retry_wait_seconds: 300  # 5 minutes
+  max_retries: 5                      # Fast retries before extended retry
+  initial_delay_ms: 100               # Initial delay before first retry
+  backoff_multiplier: 4               # Exponential backoff multiplier
+  extended_retry_wait_seconds: 300    # Wait time for extended retry (5 minutes)
+```
+
+#### TOML Format (config.toml)
+
+```toml
+# Beeport Stamp Stats Configuration
+# ==================================
+# All settings are optional - the tool has sensible defaults for everything.
+# Priority: CLI arguments > Environment variables > Config file > Built-in defaults
+
+# RPC Configuration
+[rpc]
+url = "https://rpc.gnosis.gateway.fm"
+# Alternative endpoints:
+# - https://rpc.gnosischain.com
+# - https://gnosis-pokt.nodies.app
+# - https://gnosis.drpc.org
+
+# Database Configuration
+[database]
+path = "./stamp-cache.db"
+# For PostgreSQL: "postgres://user:pass@localhost/stamps"
+# For PostgreSQL with SSL: "postgres://user:pass@db.example.com:5432/stamps?sslmode=require"
+
+# Blockchain Configuration
+[blockchain]
+chunk_size = 10000              # Blocks per RPC chunk (larger = fewer calls, may hit limits)
+block_time_seconds = 5.0        # Gnosis Chain block time (used for TTL calculations)
+
+# Retry Configuration (for rate-limited RPC calls)
+[retry]
+max_retries = 5                      # Fast retries before extended retry
+initial_delay_ms = 100               # Initial delay before first retry
+backoff_multiplier = 4               # Exponential backoff multiplier
+extended_retry_wait_seconds = 300    # Wait time for extended retry (5 minutes)
+
+# Contract Configuration
+# Postage Stamp Contracts
+[[contracts]]
+name = "PostageStamp"
+contract_type = "PostageStamp"
+address = "0x45a1502382541Cd610CC9068e88727426b696293"
+deployment_block = 31305656
+
+[[contracts]]
+name = "StampsRegistry"
+contract_type = "StampsRegistry"
+address = "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+deployment_block = 42390510
+
+# Storage Incentives Contracts
+[[contracts]]
+name = "PriceOracle"
+contract_type = "PriceOracle"
+address = "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+deployment_block = 37339168
+
+[[contracts]]
+name = "StakeRegistry"
+contract_type = "StakeRegistry"
+address = "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+deployment_block = 40430237
+
+[[contracts]]
+name = "Redistribution"
+contract_type = "Redistribution"
+address = "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+deployment_block = 41105199
+```
+
+#### JSON Format (config.json)
+
+```json
+{
+  "rpc": {
+    "url": "https://rpc.gnosis.gateway.fm"
+  },
+  "database": {
+    "path": "./stamp-cache.db"
+  },
+  "blockchain": {
+    "chunk_size": 10000,
+    "block_time_seconds": 5.0
+  },
+  "contracts": [
+    {
+      "name": "PostageStamp",
+      "contract_type": "PostageStamp",
+      "address": "0x45a1502382541Cd610CC9068e88727426b696293",
+      "deployment_block": 31305656
+    },
+    {
+      "name": "StampsRegistry",
+      "contract_type": "StampsRegistry",
+      "address": "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3",
+      "deployment_block": 42390510
+    },
+    {
+      "name": "PriceOracle",
+      "contract_type": "PriceOracle",
+      "address": "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b",
+      "deployment_block": 37339168
+    },
+    {
+      "name": "StakeRegistry",
+      "contract_type": "StakeRegistry",
+      "address": "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4",
+      "deployment_block": 40430237
+    },
+    {
+      "name": "Redistribution",
+      "contract_type": "Redistribution",
+      "address": "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d",
+      "deployment_block": 41105199
+    }
+  ],
+  "retry": {
+    "max_retries": 5,
+    "initial_delay_ms": 100,
+    "backoff_multiplier": 4,
+    "extended_retry_wait_seconds": 300
+  }
+}
 ```
 
 ### Using Config Files
@@ -743,19 +959,48 @@ Storage prices on decentralized networks can be volatile. Understanding how pric
 
 ## Contract Information
 
-### PostageStamp Contract
+### Postage Stamp Contracts
+
+#### PostageStamp Contract
 - **Network:** Gnosis Chain
 - **Contract Address:** `0x45a1502382541Cd610CC9068e88727426b696293`
 - **Contract Type:** PostageStamp (Direct stamp purchases)
-- **Deployment Block:** ~37,000,000
+- **Deployment Block:** 31,305,656
 - **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x45a1502382541Cd610CC9068e88727426b696293)
 
-### StampsRegistry Contract
+#### StampsRegistry Contract
 - **Network:** Gnosis Chain
 - **Contract Address:** `0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3`
 - **Contract Type:** StampsRegistry (UI-based stamp purchases with payer tracking)
-- **Deployment Block:** ~37,000,000
+- **Deployment Block:** 42,390,510
 - **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3)
+
+### Storage Incentives Contracts
+
+#### PriceOracle Contract
+- **Network:** Gnosis Chain
+- **Contract Address:** `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b`
+- **Contract Type:** PriceOracle (Dynamic price adjustment mechanism)
+- **Deployment Block:** 37,339,168
+- **Events:** PriceUpdate, StampPriceUpdateFailed
+- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b)
+
+#### StakeRegistry Contract
+- **Network:** Gnosis Chain
+- **Contract Address:** `0xda2a16EE889E7f04980A8d597b48c8D51B9518F4`
+- **Contract Type:** StakeRegistry (Node staking for redistribution game)
+- **Deployment Block:** 40,430,237
+- **Events:** StakeUpdated, StakeSlashed, StakeFrozen, OverlayChanged, StakeWithdrawn
+- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0xda2a16EE889E7f04980A8d597b48c8D51B9518F4)
+
+#### Redistribution Contract
+- **Network:** Gnosis Chain
+- **Contract Address:** `0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d`
+- **Contract Type:** Redistribution (Schelling coordination game for storage incentives)
+- **Deployment Block:** 41,105,199
+- **Events:** Committed, Revealed, WinnerSelected, TruthSelected, CurrentRevealAnchor, CountCommits, CountReveals, ChunkCount, PriceAdjustmentSkipped, WithdrawFailed, transformedChunkAddressFromInclusionProof
+- **Game Phases:** Commit (blocks 0-37), Reveal (blocks 38-75), Claim (blocks 76-151) per 152-block round
+- **Explorer:** [View on GnosisScan](https://gnosisscan.io/address/0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d)
 
 ### Understanding Contract Event Relationships
 

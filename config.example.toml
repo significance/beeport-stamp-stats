@@ -1,0 +1,202 @@
+# Beeport Stamp Stats Configuration Example (TOML)
+# ===================================================
+#
+# This file shows all available configuration options with their default values.
+# Copy this file to `config.toml` and customize as needed.
+#
+# All settings are optional - the tool has sensible defaults for everything.
+# Priority: CLI arguments > Environment variables > Config file > Built-in defaults
+#
+# Usage:
+#   beeport-stamp-stats --config config.toml fetch
+
+# =============================================================================
+# RPC Configuration
+# =============================================================================
+[rpc]
+# Gnosis Chain RPC endpoint URL
+# Default: https://rpc.gnosis.gateway.fm
+url = "https://rpc.gnosis.gateway.fm"
+
+# Alternative endpoints (uncomment to use):
+# url = "https://rpc.gnosischain.com"
+# url = "https://gnosis-pokt.nodies.app"
+# url = "https://gnosis.drpc.org"
+# url = "https://gnosis-mainnet.public.blastapi.io"
+
+# =============================================================================
+# Database Configuration
+# =============================================================================
+[database]
+# Database connection path
+#
+# SQLite (file-based):
+#   path = "./stamp-cache.db"
+#   path = "/var/lib/beeport/stamps.db"
+#
+# PostgreSQL (network-based):
+#   path = "postgres://user:pass@localhost/stamps"
+#   path = "postgres://user:pass@db.example.com:5432/stamps?sslmode=require"
+#
+# Default: ./stamp-cache.db
+path = "./stamp-cache.db"
+
+# =============================================================================
+# Blockchain Configuration
+# =============================================================================
+[blockchain]
+# Number of blocks to fetch per RPC request chunk
+#
+# Larger values:
+#   - Reduce number of RPC calls
+#   - May hit provider limits
+#   - Faster for unthrottled RPCs
+#
+# Smaller values:
+#   - More RPC calls
+#   - Better for rate-limited RPCs
+#   - More granular progress updates
+#
+# Default: 10000
+chunk_size = 10000
+
+# Block time in seconds (chain-specific)
+#
+# Used for TTL and expiry calculations.
+# Gnosis Chain: 5.0 seconds
+# Ethereum: 12.0 seconds
+#
+# Default: 5.0 (Gnosis Chain)
+block_time_seconds = 5.0
+
+# =============================================================================
+# Retry Configuration
+# =============================================================================
+# Controls retry behavior for rate-limited RPC calls.
+# Uses two-phase retry strategy:
+#   Phase 1: Fast exponential backoff (max_retries attempts)
+#   Phase 2: Extended retry (indefinite, with long waits)
+[retry]
+# Maximum number of fast retries before entering extended retry mode
+# Default: 5
+max_retries = 5
+
+# Initial delay in milliseconds before first retry
+# Default: 100ms
+initial_delay_ms = 100
+
+# Exponential backoff multiplier
+#
+# Each retry delay = initial_delay_ms * backoff_multiplier^retry_count
+#
+# Example with backoff_multiplier: 4
+#   Retry 1: 100ms * 4^0 = 100ms
+#   Retry 2: 100ms * 4^1 = 400ms
+#   Retry 3: 100ms * 4^2 = 1,600ms
+#   Retry 4: 100ms * 4^3 = 6,400ms
+#   Retry 5: 100ms * 4^4 = 25,600ms (25.6 seconds)
+#
+# Default: 4
+backoff_multiplier = 4
+
+# Wait time in seconds before extended retry phase
+#
+# After max_retries is exhausted, wait this long before resetting
+# the retry counter and trying again.
+#
+# Default: 300 (5 minutes)
+extended_retry_wait_seconds = 300
+
+# =============================================================================
+# Contract Configuration
+# =============================================================================
+# List of contracts to monitor. Each contract needs:
+# - name: Human-readable identifier
+# - contract_type: Implementation type (PostageStamp, StampsRegistry, etc.)
+# - address: Contract address (hex with 0x prefix)
+# - deployment_block: Block number when contract was deployed
+#
+# Note: Events before deployment_block are not fetched.
+
+# -----------------------------------------------------------------------------
+# Postage Stamp Contracts
+# -----------------------------------------------------------------------------
+# PostageStamp - Main contract for direct stamp purchases
+[[contracts]]
+name = "PostageStamp"
+contract_type = "PostageStamp"
+address = "0x45a1502382541Cd610CC9068e88727426b696293"
+deployment_block = 31305656
+
+# StampsRegistry - UI-based stamp purchases with payer tracking
+[[contracts]]
+name = "StampsRegistry"
+contract_type = "StampsRegistry"
+address = "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+deployment_block = 42390510
+
+# -----------------------------------------------------------------------------
+# Storage Incentives Contracts
+# -----------------------------------------------------------------------------
+# PriceOracle - Dynamic price adjustment mechanism
+[[contracts]]
+name = "PriceOracle"
+contract_type = "PriceOracle"
+address = "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+deployment_block = 37339168
+
+# StakeRegistry - Node staking for redistribution game
+[[contracts]]
+name = "StakeRegistry"
+contract_type = "StakeRegistry"
+address = "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+deployment_block = 40430237
+
+# Redistribution - Schelling coordination game for storage incentives
+[[contracts]]
+name = "Redistribution"
+contract_type = "Redistribution"
+address = "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+deployment_block = 41105199
+
+# =============================================================================
+# Adding Custom Contracts
+# =============================================================================
+# To add a new contract, copy this template:
+#
+# [[contracts]]
+# name = "MyContract"
+# contract_type = "MyContract"  # Must match implementation in code
+# address = "0x..."             # Contract address on Gnosis Chain
+# deployment_block = 12345678   # Deployment block number
+
+# =============================================================================
+# Usage Examples
+# =============================================================================
+#
+# 1. Use config file:
+#    beeport-stamp-stats --config config.toml fetch
+#
+# 2. Override with environment variables:
+#    export BEEPORT__RPC__URL=https://custom-rpc.com
+#    beeport-stamp-stats --config config.toml fetch
+#
+# 3. Override with CLI arguments (highest priority):
+#    beeport-stamp-stats --config config.toml --rpc-url https://custom.com fetch
+#
+# 4. Combine all sources:
+#    export BEEPORT__DATABASE__PATH=postgres://localhost/stamps
+#    beeport-stamp-stats --config config.toml --rpc-url https://custom.com fetch
+#
+# =============================================================================
+# Environment Variable Format
+# =============================================================================
+#
+# Use BEEPORT__ prefix with double underscores for nesting:
+#
+# BEEPORT__RPC__URL=https://...                    overrides rpc.url
+# BEEPORT__DATABASE__PATH=/path/to/db              overrides database.path
+# BEEPORT__BLOCKCHAIN__CHUNK_SIZE=5000             overrides blockchain.chunk_size
+# BEEPORT__RETRY__MAX_RETRIES=10                   overrides retry.max_retries
+#
+# =============================================================================

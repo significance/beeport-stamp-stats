@@ -31,11 +31,11 @@ database:
   #   path: "/var/lib/beeport/stamps.db"
   #
   # PostgreSQL (network-based):
-  #   path: "postgres://user:pass@localhost/stamps"
+    path: "postgres://sig32@localhost/beeport2"
   #   path: "postgres://user:pass@db.example.com:5432/stamps?sslmode=require"
   #
   # Default: ./stamp-cache.db
-  path: "./stamp-cache.db"
+  # path: "./stamp-cache.db"
 
 # Blockchain Configuration
 # -------------------------
@@ -69,7 +69,7 @@ blockchain:
 #
 # List of contracts to monitor. Each contract needs:
 # - name: Human-readable identifier
-# - contract_type: Implementation type (PostageStamp, StampsRegistry)
+# - contract_type: Implementation type (PostageStamp, StampsRegistry, PriceOracle, StakeRegistry, Redistribution)
 # - address: Contract address (hex with 0x prefix)
 # - deployment_block: Block number when contract was deployed
 #
@@ -86,6 +86,24 @@ contracts:
     contract_type: "StampsRegistry"
     address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
     deployment_block: 42390510
+
+  # PriceOracle - Dynamic price adjustment mechanism
+  - name: "PriceOracle"
+    contract_type: "PriceOracle"
+    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+    deployment_block: 37339168
+
+  # StakeRegistry - Node staking for redistribution game
+  - name: "StakeRegistry"
+    contract_type: "StakeRegistry"
+    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+    deployment_block: 40430237
+
+  # Redistribution - Schelling coordination game for storage incentives
+  - name: "Redistribution"
+    contract_type: "Redistribution"
+    address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+    deployment_block: 41105199
 
   # To add a new contract, copy this template:
   # - name: "MyContract"

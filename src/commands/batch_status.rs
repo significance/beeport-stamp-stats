@@ -20,7 +20,7 @@ pub struct BatchStatus {
     #[tabled(rename = "Size (chunks)")]
     pub size_chunks: String,
 
-    #[tabled(rename = "Balance (PLUR)")]
+    #[tabled(rename = "Balance (PLUR/chunk)")]
     pub normalised_balance: String,
 
     #[tabled(rename = "TTL (blocks)")]

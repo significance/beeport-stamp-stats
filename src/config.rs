@@ -87,7 +87,7 @@ pub struct ContractConfig {
 
     /// Contract type identifier (must match implementation)
     ///
-    /// Valid values: "PostageStamp", "StampsRegistry"
+    /// Valid values: "PostageStamp", "StampsRegistry", "PriceOracle", "StakeRegistry", "Redistribution"
     pub contract_type: String,
 
     /// Contract address on blockchain (hex string with 0x prefix)
@@ -125,6 +125,24 @@ impl Default for AppConfig {
                     contract_type: "StampsRegistry".to_string(),
                     address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3".to_string(),
                     deployment_block: 42390510,
+                },
+                ContractConfig {
+                    name: "PriceOracle".to_string(),
+                    contract_type: "PriceOracle".to_string(),
+                    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b".to_string(),
+                    deployment_block: 37339168,
+                },
+                ContractConfig {
+                    name: "StakeRegistry".to_string(),
+                    contract_type: "StakeRegistry".to_string(),
+                    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4".to_string(),
+                    deployment_block: 40430237,
+                },
+                ContractConfig {
+                    name: "Redistribution".to_string(),
+                    contract_type: "Redistribution".to_string(),
+                    address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d".to_string(),
+                    deployment_block: 41105199,
                 },
             ],
             retry: RetryConfig {
@@ -247,7 +265,13 @@ impl AppConfig {
             }
 
             // Validate contract type
-            let valid_types = ["PostageStamp", "StampsRegistry"];
+            let valid_types = [
+                "PostageStamp",
+                "StampsRegistry",
+                "PriceOracle",
+                "StakeRegistry",
+                "Redistribution",
+            ];
             if !valid_types.contains(&contract.contract_type.as_str()) {
                 return Err(format!(
                     "Unknown contract type '{}' for contract '{}'. Valid types: {}",
@@ -306,7 +330,7 @@ mod tests {
         assert_eq!(config.database.path, "./stamp-cache.db");
         assert_eq!(config.blockchain.chunk_size, 10000);
         assert_eq!(config.blockchain.block_time_seconds, 5.0);
-        assert_eq!(config.contracts.len(), 2);
+        assert_eq!(config.contracts.len(), 5);
         assert_eq!(config.retry.max_retries, 5);
         assert_eq!(config.retry.backoff_multiplier, 4);
     }

@@ -318,6 +318,77 @@ impl ContractRegistry {
 
 ---
 
+## Project Management & Planning
+
+### Implementation Plans (plan.md)
+
+**When to create plan.md:**
+For any multi-step task or feature implementation that involves:
+- Adding new functionality
+- Refactoring across multiple modules
+- Adding new contracts or event types
+- Any work that spans multiple sessions
+- Complex changes requiring coordination
+
+**What plan.md should contain:**
+1. **Overview** - Goal, context, scope
+2. **Requirements** - What needs to be accomplished
+3. **Architecture decisions** - Database schema, API design, etc.
+4. **Phased implementation plan** - Broken into logical steps
+5. **Technical challenges** - Known difficult areas and solutions
+6. **Success criteria** - How to know when done
+7. **Testing strategy** - Unit, integration, functional tests
+8. **Progress tracking** - Checkboxes for each task
+
+**Maintaining plan.md:**
+- ✅ Mark items as complete using `[x]` checkboxes
+- 🚧 Update status section at top of file
+- 📝 Add notes/learnings as work progresses
+- 🔄 Revise plan if requirements change
+- 📅 Update "Last Updated" timestamp
+
+**Example plan.md structure:**
+```markdown
+# Feature Name - Implementation Plan
+
+**Status:** In Progress
+**Started:** YYYY-MM-DD
+**Goal:** Brief description
+
+## Overview
+...
+
+## Phases
+
+### ✅ Phase 1: Planning
+- [x] Task 1
+- [x] Task 2
+
+### 🚧 Phase 2: Implementation
+- [x] Completed task
+- [ ] In progress task
+- [ ] Pending task
+
+### ⬜ Phase 3: Testing
+- [ ] Task 1
+...
+
+## Progress Tracking
+**Current Phase:** Phase 2
+**Next Step:** Complete task X
+
+*Last Updated: YYYY-MM-DD*
+```
+
+**Benefits:**
+- Clear roadmap for multi-session work
+- Easy to resume after interruptions
+- Tracks what's done vs what remains
+- Documents architectural decisions
+- Reduces repeated planning overhead
+
+---
+
 ## Configuration Philosophy
 
 **Three-Layer Configuration:**
