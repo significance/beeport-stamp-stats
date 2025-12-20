@@ -6,8 +6,10 @@ use crate::{
     batch,
     blockchain::BlockchainClient,
     cache::Cache,
+    config::AppConfig,
+    contracts::{abi::DEFAULT_START_BLOCK, ContractRegistry},
     display,
-    events::{DEFAULT_START_BLOCK, EventType},
+    events::EventType,
     export,
     hooks::{EventHook, StubHook},
 };
@@ -19,17 +21,26 @@ use crate::{
 #[command(name = "beeport-stamp-stats")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
-    /// RPC endpoint URL
-    #[arg(long, env = "RPC_URL", default_value = "https://rpc.gnosis.gateway.fm")]
-    pub rpc_url: String,
+    /// Path to configuration file (YAML, TOML, or JSON)
+    ///
+    /// If not provided, uses default configuration with environment variable overrides.
+    /// Config file settings can be overridden by environment variables and CLI arguments.
+    #[arg(long, short = 'c', env = "BEEPORT_CONFIG")]
+    pub config: Option<PathBuf>,
+
+    /// RPC endpoint URL (overrides config file)
+    #[arg(long, env = "RPC_URL")]
+    pub rpc_url: Option<String>,
 
     /// Path to the cache database (SQLite file path or PostgreSQL connection string)
     ///
     /// Examples:
     ///   - SQLite: ./stamp-cache.db
     ///   - PostgreSQL: postgres://user:pass@localhost/stamps
-    #[arg(long, short = 'd', alias = "database", env = "CACHE_DB", default_value = "./stamp-cache.db")]
-    pub cache_db: PathBuf,
+    ///
+    /// Overrides config file setting.
+    #[arg(long, short = 'd', alias = "database", env = "CACHE_DB")]
+    pub cache_db: Option<PathBuf>,
 
     /// Enable verbose logging (shows all RPC requests)
     #[arg(short = 'v', long)]
@@ -234,6 +245,7 @@ pub enum GroupBy {
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
+#[allow(clippy::enum_variant_names)]
 pub enum FilterEventType {
     BatchCreated,
     BatchTopUp,
@@ -323,25 +335,61 @@ impl From<ExportFormat> for export::ExportFormat {
 }
 
 impl Cli {
+    /// Resolve configuration from multiple sources with proper priority
+    ///
+    /// Priority: CLI args > Environment vars > Config file > Defaults
+    fn resolve_config(&self) -> Result<AppConfig> {
+        // Load base config (from file or defaults)
+        let mut config = if let Some(config_path) = &self.config {
+            AppConfig::load_from_file(config_path)?
+        } else {
+            AppConfig::load()?
+        };
+
+        // Apply CLI overrides
+        if let Some(rpc_url) = &self.rpc_url {
+            config.rpc.url = rpc_url.clone();
+        }
+
+        if let Some(cache_db) = &self.cache_db {
+            config.database.path = cache_db.to_string_lossy().to_string();
+        }
+
+        // Validate config
+        config.validate().map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok(config)
+    }
+
     pub async fn execute(&self) -> Result<()> {
+        // Resolve configuration
+        let config = self.resolve_config()?;
+
+        // Build contract registry from configuration
+        let registry = ContractRegistry::from_config(&config)?;
+
+        // Initialize blockchain client
+        let client = BlockchainClient::new(&config.rpc.url).await?;
+
         // Initialize cache
-        let cache = Cache::new(&self.cache_db).await?;
+        let cache = Cache::new(&PathBuf::from(&config.database.path)).await?;
 
         match &self.command {
             Commands::Fetch {
                 from_block,
                 to_block,
                 incremental,
-                max_retries,
-                initial_delay_ms,
+                max_retries: _,  // Ignored, use config
+                initial_delay_ms: _,  // Ignored, use config
             } => {
                 self.execute_fetch(
                     cache,
+                    client,
+                    &registry,
+                    &config,
                     *from_block,
                     *to_block,
                     *incremental,
-                    *max_retries,
-                    *initial_delay_ms,
                 )
                 .await
             }
@@ -386,16 +434,27 @@ impl Cli {
             Commands::Follow {
                 poll_interval,
                 display,
-            } => self.execute_follow(cache, *poll_interval, *display).await,
+            } => {
+                self.execute_follow(cache, client, &registry, &config, *poll_interval, *display)
+                    .await
+            }
             Commands::Sync {
                 from_block,
                 to_block,
                 contract,
             } => {
-                self.execute_sync(cache, *from_block, *to_block, contract.clone())
-                    .await
+                self.execute_sync(
+                    cache,
+                    client,
+                    &registry,
+                    &config,
+                    *from_block,
+                    *to_block,
+                    contract.clone(),
+                )
+                .await
             }
-            Commands::Price => self.execute_price().await,
+            Commands::Price => self.execute_price(client, &registry).await,
             Commands::BatchStatus {
                 sort_by,
                 output,
@@ -403,19 +462,21 @@ impl Cli {
                 price_change,
                 refresh,
                 only_missing,
-                max_retries,
+                max_retries: _,  // Ignored, use config
                 hide_zero_balance,
                 cache_validity_blocks,
             } => {
                 self.execute_batch_status(
                     cache,
+                    client,
+                    &registry,
+                    &config,
                     sort_by.clone(),
                     output.clone(),
                     price.clone(),
                     price_change.clone(),
                     *refresh,
                     *only_missing,
-                    *max_retries,
                     *hide_zero_balance,
                     *cache_validity_blocks,
                 )
@@ -428,18 +489,20 @@ impl Cli {
                 price,
                 price_change,
                 refresh,
-                max_retries,
+                max_retries: _,  // Ignored, use config
                 cache_validity_blocks,
             } => {
                 self.execute_expiry_analytics(
                     cache,
+                    client,
+                    &registry,
+                    &config,
                     period.clone(),
                     output.clone(),
                     sort_by.clone(),
                     price.clone(),
                     price_change.clone(),
                     *refresh,
-                    *max_retries,
                     *cache_validity_blocks,
                 )
                 .await
@@ -447,19 +510,18 @@ impl Cli {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_fetch(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         from_block: Option<u64>,
         to_block: Option<u64>,
         incremental: bool,
-        max_retries: u32,
-        initial_delay_ms: u64,
     ) -> Result<()> {
         tracing::info!("Fetching events from blockchain...");
-
-        // Create blockchain client
-        let client = BlockchainClient::new(&self.rpc_url).await?;
 
         // Determine block range
         let from = if incremental {
@@ -469,7 +531,7 @@ impl Cli {
         }
         .unwrap_or(DEFAULT_START_BLOCK);
 
-        let to = to_block.unwrap_or_else(|| {
+        let to = to_block.unwrap_or({
             // We'll get latest block from the client
             u64::MAX
         });
@@ -484,28 +546,44 @@ impl Cli {
             }
         );
 
-        // Fetch and display events
+        // Fetch and display events with incremental storage
+        let cache_clone = cache.clone();
+        let client_clone = client.clone();
         let events = client
-            .fetch_batch_events(from, to, &cache, max_retries, initial_delay_ms)
+            .fetch_batch_events(
+                from,
+                to,
+                &cache,
+                registry,
+                &config.blockchain,
+                &config.retry,
+                |chunk_events: Vec<crate::events::StampEvent>| {
+                    let cache = cache_clone.clone();
+                    let client = client_clone.clone();
+                    async move {
+                        // Store events from this chunk
+                        cache.store_events(&chunk_events).await?;
+
+                        // Store batch info for BatchCreated events in this chunk
+                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        cache.store_batches(&batches).await?;
+
+                        tracing::debug!(
+                            "Stored {} events and {} batches from chunk",
+                            chunk_events.len(),
+                            batches.len()
+                        );
+
+                        Ok(())
+                    }
+                },
+            )
             .await?;
 
-        tracing::info!("Found {} events", events.len());
+        tracing::info!("Found {} total events", events.len());
 
         // Display events in markdown table
         display::display_events(&events)?;
-
-        // Fetch batch information for BatchCreated events
-        let batches = client.fetch_batch_info(&events).await?;
-
-        // Cache everything
-        cache.store_events(&events).await?;
-        cache.store_batches(&batches).await?;
-
-        tracing::info!(
-            "Cached {} events and {} batches",
-            events.len(),
-            batches.len()
-        );
 
         Ok(())
     }
@@ -558,6 +636,7 @@ impl Cli {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_export(
         &self,
         cache: Cache,
@@ -633,13 +712,18 @@ impl Cli {
         Ok(())
     }
 
-    async fn execute_follow(&self, cache: Cache, poll_interval: u64, display: bool) -> Result<()> {
+    async fn execute_follow(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
+        poll_interval: u64,
+        display: bool,
+    ) -> Result<()> {
         use tokio::time::{Duration, interval};
 
         tracing::info!("Starting follow mode with {}s poll interval", poll_interval);
-
-        // Create blockchain client
-        let client = BlockchainClient::new(&self.rpc_url).await?;
 
         // Create event hook
         let hook = StubHook;
@@ -651,9 +735,32 @@ impl Cli {
             last_synced_block
         );
 
-        // Fetch all events up to current block
+        // Fetch all events up to current block with incremental storage
+        let cache_clone = cache.clone();
+        let client_clone = client.clone();
         let latest_block = client
-            .fetch_batch_events(last_synced_block + 1, u64::MAX, &cache, 5, 100)
+            .fetch_batch_events(
+                last_synced_block + 1,
+                u64::MAX,
+                &cache,
+                registry,
+                &config.blockchain,
+                &config.retry,
+                |chunk_events: Vec<crate::events::StampEvent>| {
+                    let cache = cache_clone.clone();
+                    let client = client_clone.clone();
+                    async move {
+                        // Store events from this chunk
+                        cache.store_events(&chunk_events).await?;
+
+                        // Store batch info for BatchCreated events in this chunk
+                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        cache.store_batches(&batches).await?;
+
+                        Ok(())
+                    }
+                },
+            )
             .await?;
         let current_latest = if !latest_block.is_empty() {
             latest_block.last().unwrap().block_number
@@ -669,11 +776,6 @@ impl Cli {
                 current_latest
             );
 
-            // Cache historical events
-            let batches = client.fetch_batch_info(&latest_block).await?;
-            cache.store_events(&latest_block).await?;
-            cache.store_batches(&batches).await?;
-
             if display {
                 display::display_events(&latest_block)?;
             }
@@ -682,8 +784,7 @@ impl Cli {
         }
 
         println!(
-            "\n🔄 Following blockchain for new events (polling every {}s)...",
-            poll_interval
+            "\n🔄 Following blockchain for new events (polling every {poll_interval}s)..."
         );
         println!("Press Ctrl+C to stop\n");
 
@@ -694,9 +795,32 @@ impl Cli {
         loop {
             poll_timer.tick().await;
 
-            // Fetch new events since last check
+            // Fetch new events since last check with incremental storage
+            let cache_clone = cache.clone();
+            let client_clone = client.clone();
             let new_events = client
-                .fetch_batch_events(last_checked_block + 1, u64::MAX, &cache, 5, 100)
+                .fetch_batch_events(
+                    last_checked_block + 1,
+                    u64::MAX,
+                    &cache,
+                    registry,
+                    &config.blockchain,
+                    &config.retry,
+                    |chunk_events| {
+                        let cache = cache_clone.clone();
+                        let client = client_clone.clone();
+                        async move {
+                            // Store events from this chunk
+                            cache.store_events(&chunk_events).await?;
+
+                            // Store batch info for BatchCreated events in this chunk
+                            let batches = client.fetch_batch_info(&chunk_events).await?;
+                            cache.store_batches(&batches).await?;
+
+                            Ok(())
+                        }
+                    },
+                )
                 .await?;
 
             if !new_events.is_empty() {
@@ -706,11 +830,6 @@ impl Cli {
                 for event in &new_events {
                     hook.on_event(event);
                 }
-
-                // Cache new events
-                let batches = client.fetch_batch_info(&new_events).await?;
-                cache.store_events(&new_events).await?;
-                cache.store_batches(&batches).await?;
 
                 // Display if requested
                 if display {
@@ -731,32 +850,37 @@ impl Cli {
         }
     }
 
-    async fn execute_price(&self) -> Result<()> {
+    async fn execute_price(
+        &self,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+    ) -> Result<()> {
         tracing::info!("Querying current storage price from blockchain...");
 
-        let client = BlockchainClient::new(&self.rpc_url).await?;
-        let price = client.get_current_price().await?;
+        let price = client.get_current_price(registry).await?;
         let current_block = client.get_current_block().await?;
 
         println!("\n📊 Current Storage Price\n");
         println!("Price per chunk per block: {} PLUR", format_number(price));
         println!("Current block: {}", format_number(current_block as u128));
         println!("\nThis price is used to calculate batch TTL (Time To Live).");
-        println!("Use --price {} with batch-status or expiry-analytics commands.", price);
+        println!("Use --price {price} with batch-status or expiry-analytics commands.");
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_sync(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         from_block: Option<u64>,
         to_block: Option<u64>,
         _contract: Option<String>,
     ) -> Result<()> {
         tracing::info!("Syncing database with blockchain...");
-
-        let client = BlockchainClient::new(&self.rpc_url).await?;
 
         // Determine start block
         let from = from_block
@@ -781,8 +905,33 @@ impl Cli {
             }
         );
 
-        // Fetch events
-        let events = client.fetch_batch_events(from, to, &cache, 5, 100).await?;
+        // Fetch events with incremental storage
+        let cache_clone = cache.clone();
+        let client_clone = client.clone();
+        let events = client
+            .fetch_batch_events(
+                from,
+                to,
+                &cache,
+                registry,
+                &config.blockchain,
+                &config.retry,
+                |chunk_events: Vec<crate::events::StampEvent>| {
+                    let cache = cache_clone.clone();
+                    let client = client_clone.clone();
+                    async move {
+                        // Store events from this chunk
+                        cache.store_events(&chunk_events).await?;
+
+                        // Store batch info for BatchCreated events in this chunk
+                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        cache.store_batches(&batches).await?;
+
+                        Ok(())
+                    }
+                },
+            )
+            .await?;
 
         if events.is_empty() {
             println!("✅ Database is already up to date!");
@@ -791,69 +940,83 @@ impl Cli {
 
         tracing::info!("Found {} new events", events.len());
 
-        // Fetch batch information
-        let batches = client.fetch_batch_info(&events).await?;
-
-        // Store in database
-        cache.store_events(&events).await?;
-        cache.store_batches(&batches).await?;
+        // Count batches for display (already stored incrementally)
+        let batch_count = events.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
 
         // Cache the current price
-        let current_price = client.get_current_price().await?;
+        let current_price = client.get_current_price(registry).await?;
         cache.cache_price(current_price).await?;
 
         println!(
             "✅ Synced {} events and {} batches to database",
             events.len(),
-            batches.len()
+            batch_count
         );
-        println!("💰 Cached current price: {} PLUR/chunk/block", current_price);
+        println!("💰 Cached current price: {current_price} PLUR/chunk/block");
 
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_batch_status(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         sort_by: BatchStatusSortBy,
         output: OutputFormat,
         price: Option<String>,
         price_change: Option<String>,
         refresh: bool,
         only_missing: bool,
-        max_retries: u32,
         hide_zero_balance: bool,
         cache_validity_blocks: u64,
     ) -> Result<()> {
-        let client = BlockchainClient::new(&self.rpc_url).await?;
-        crate::commands::batch_status::execute(cache, &client, sort_by, output, price, price_change, refresh, only_missing, max_retries, hide_zero_balance, cache_validity_blocks)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))
+        crate::commands::batch_status::execute(
+            cache,
+            &client,
+            registry,
+            config,
+            sort_by,
+            output,
+            price,
+            price_change,
+            refresh,
+            only_missing,
+            hide_zero_balance,
+            cache_validity_blocks,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_expiry_analytics(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         period: TimePeriod,
         output: OutputFormat,
         sort_by: ExpiryAnalyticsSortBy,
         price: Option<String>,
         price_change: Option<String>,
         refresh: bool,
-        max_retries: u32,
         cache_validity_blocks: u64,
     ) -> Result<()> {
-        let client = BlockchainClient::new(&self.rpc_url).await?;
         crate::commands::expiry_analytics::execute(
             cache,
             &client,
+            registry,
+            config,
             period,
             output,
             sort_by,
             price,
             price_change,
             refresh,
-            max_retries,
             cache_validity_blocks,
         )
         .await
@@ -883,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_cli_parsing() {
-        let cli = Cli::parse_from(&[
+        let cli = Cli::parse_from([
             "beeport-stamp-stats",
             "--rpc-url",
             "http://localhost:8545",
@@ -892,7 +1055,7 @@ mod tests {
             "1000000",
         ]);
 
-        assert_eq!(cli.rpc_url, "http://localhost:8545");
+        assert_eq!(cli.rpc_url, Some("http://localhost:8545".to_string()));
         match cli.command {
             Commands::Fetch { from_block, .. } => {
                 assert_eq!(from_block, Some(1000000));
@@ -903,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_summary_parsing() {
-        let cli = Cli::parse_from(&[
+        let cli = Cli::parse_from([
             "beeport-stamp-stats",
             "summary",
             "--group-by",

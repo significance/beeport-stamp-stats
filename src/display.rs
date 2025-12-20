@@ -49,7 +49,7 @@ pub fn display_events(events: &[StampEvent]) -> Result<()> {
         .with(Style::markdown())
         .with(Modify::new(Rows::new(1..)).with(Alignment::left()));
 
-    println!("{}\n", table);
+    println!("{table}\n");
     println!("**Total events:** {}\n", events.len());
 
     Ok(())
@@ -94,11 +94,11 @@ pub fn display_summary(
         .count();
 
     println!("- **Total Events:** {}", events.len());
-    println!("  - PostageStamp: {}", postage_stamp_count);
-    println!("  - StampsRegistry: {}", stamps_registry_count);
-    println!("- **Batch Created:** {}", batch_created);
-    println!("- **Batch Top-ups:** {}", batch_topup);
-    println!("- **Batch Depth Increases:** {}", batch_depth_increase);
+    println!("  - PostageStamp: {postage_stamp_count}");
+    println!("  - StampsRegistry: {stamps_registry_count}");
+    println!("- **Batch Created:** {batch_created}");
+    println!("- **Batch Top-ups:** {batch_topup}");
+    println!("- **Batch Depth Increases:** {batch_depth_increase}");
     println!("- **Unique Batches:** {}\n", batches.len());
 
     // Time range
@@ -121,7 +121,7 @@ pub fn display_summary(
     // Aggregate by period
     let period_stats = aggregate_events(events, &group_by);
 
-    println!("### Activity by {:?}\n", group_by);
+    println!("### Activity by {group_by:?}\n");
 
     #[derive(Tabled)]
     struct PeriodRow {
@@ -156,7 +156,7 @@ pub fn display_summary(
         .with(Style::markdown())
         .with(Modify::new(Rows::new(1..)).with(Alignment::right()));
 
-    println!("{}\n", table);
+    println!("{table}\n");
 
     // Most active period
     if let Some(most_active) = period_stats.iter().max_by_key(|s| s.total_events) {
@@ -206,7 +206,7 @@ pub fn display_summary(
             .with(Style::markdown())
             .with(Modify::new(Rows::new(1..)).with(Alignment::left()));
 
-        println!("{}\n", table);
+        println!("{table}\n");
     }
 
     Ok(())
@@ -234,7 +234,7 @@ fn format_event_details(data: &EventData) -> String {
             format!("Top-up: {} PLUR", format_amount(topup_amount))
         }
         EventData::BatchDepthIncrease { new_depth, .. } => {
-            format!("New Depth: {}", new_depth)
+            format!("New Depth: {new_depth}")
         }
     }
 }
@@ -261,7 +261,7 @@ fn truncate_contract_name(contract: &str) -> String {
 fn format_amount(amount: &str) -> String {
     if let Ok(value) = amount.parse::<u128>() {
         let eth_value = value as f64 / 1e16;
-        format!("{:.4}", eth_value)
+        format!("{eth_value:.4}")
     } else {
         amount.to_string()
     }

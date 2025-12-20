@@ -19,10 +19,12 @@ pub struct PriceChange {
     pub days: f64,
 }
 
-impl PriceChange {
+impl FromStr for PriceChange {
+    type Err = StampError;
+
     /// Parse price change from string format "percentage:days"
     /// Example: "200:10" means 200% increase over 10 days
-    pub fn from_str(s: &str) -> Result<Self> {
+    fn from_str(s: &str) -> Result<Self> {
         let parts: Vec<&str> = s.split(':').collect();
         if parts.len() != 2 {
             return Err(StampError::Parse(
@@ -44,6 +46,9 @@ impl PriceChange {
 
         Ok(Self { percentage, days })
     }
+}
+
+impl PriceChange {
 
     /// Calculate the daily growth rate
     /// Formula: r = (1 + percentage/100)^(1/days)
@@ -153,21 +158,26 @@ pub fn calculate_ttl_blocks(
 }
 
 /// Calculate Time To Live in days from blocks
-/// Assuming 5 second block time on Gnosis Chain
-pub fn blocks_to_days(blocks: u64) -> f64 {
-    const SECONDS_PER_BLOCK: f64 = 5.0;
+///
+/// # Arguments
+/// * `blocks` - Number of blocks
+/// * `block_time_seconds` - Time per block in seconds (e.g., 5.0 for Gnosis Chain)
+pub fn blocks_to_days(blocks: u64, block_time_seconds: f64) -> f64 {
     const SECONDS_PER_DAY: f64 = 86400.0;
 
-    (blocks as f64) * SECONDS_PER_BLOCK / SECONDS_PER_DAY
+    (blocks as f64) * block_time_seconds / SECONDS_PER_DAY
 }
 
 /// Calculate days to blocks
+///
+/// # Arguments
+/// * `days` - Number of days
+/// * `block_time_seconds` - Time per block in seconds (e.g., 5.0 for Gnosis Chain)
 #[allow(dead_code)]
-pub fn days_to_blocks(days: f64) -> u64 {
-    const SECONDS_PER_BLOCK: f64 = 5.0;
+pub fn days_to_blocks(days: f64, block_time_seconds: f64) -> u64 {
     const SECONDS_PER_DAY: f64 = 86400.0;
 
-    ((days * SECONDS_PER_DAY) / SECONDS_PER_BLOCK).round() as u64
+    ((days * SECONDS_PER_DAY) / block_time_seconds).round() as u64
 }
 
 #[cfg(test)]
@@ -257,23 +267,31 @@ mod tests {
     #[test]
     fn test_blocks_to_days() {
         // 17,280 blocks = 1 day (at 5 seconds per block)
-        let days = blocks_to_days(17280);
+        let days = blocks_to_days(17280, 5.0);
         assert!((days - 1.0).abs() < 0.01);
 
         // 172,800 blocks = 10 days
-        let days = blocks_to_days(172800);
+        let days = blocks_to_days(172800, 5.0);
         assert!((days - 10.0).abs() < 0.01);
+
+        // Test with different block time (12 seconds like Ethereum)
+        let days = blocks_to_days(7200, 12.0);
+        assert!((days - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn test_days_to_blocks() {
-        // 1 day = 17,280 blocks
-        let blocks = days_to_blocks(1.0);
+        // 1 day = 17,280 blocks (at 5 seconds per block)
+        let blocks = days_to_blocks(1.0, 5.0);
         assert_eq!(blocks, 17280);
 
         // 10 days = 172,800 blocks
-        let blocks = days_to_blocks(10.0);
+        let blocks = days_to_blocks(10.0, 5.0);
         assert_eq!(blocks, 172800);
+
+        // Test with different block time (12 seconds like Ethereum)
+        let blocks = days_to_blocks(1.0, 12.0);
+        assert_eq!(blocks, 7200);
     }
 
     #[test]

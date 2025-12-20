@@ -14,6 +14,9 @@ pub enum StampError {
     #[error("Contract error: {0}")]
     Contract(String),
 
+    #[error("Configuration error: {0}")]
+    Config(String),
+
     #[error("Parse error: {0}")]
     Parse(String),
 

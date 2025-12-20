@@ -61,6 +61,88 @@ cargo build --release
 # The binary will be at target/release/beeport-stamp-stats
 ```
 
+## Configuration
+
+Beeport Stamp Stats supports flexible configuration through multiple sources with clear priority:
+
+**Priority Order:** CLI arguments > Environment variables > Config file > Built-in defaults
+
+### Configuration File
+
+Create a `config.yaml` (or `.toml`, `.json`) file to customize settings:
+
+```yaml
+rpc:
+  url: "https://rpc.gnosis.gateway.fm"
+
+database:
+  path: "./stamp-cache.db"
+  # For PostgreSQL: "postgres://user:pass@localhost/stamps"
+
+blockchain:
+  chunk_size: 10000          # Blocks per RPC chunk
+  block_time_seconds: 5.0    # Gnosis Chain block time
+
+contracts:
+  - name: "PostageStamp"
+    contract_type: "PostageStamp"
+    address: "0x45a1502382541Cd610CC9068e88727426b696293"
+    deployment_block: 31305656
+
+  - name: "StampsRegistry"
+    contract_type: "StampsRegistry"
+    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+    deployment_block: 42390510
+
+retry:
+  max_retries: 5
+  initial_delay_ms: 100
+  backoff_multiplier: 4
+  extended_retry_wait_seconds: 300  # 5 minutes
+```
+
+### Using Config Files
+
+```bash
+# Specify config file
+beeport-stamp-stats --config production.yaml fetch
+
+# Override specific values
+beeport-stamp-stats --config production.yaml --rpc-url http://custom.rpc fetch
+
+# Use defaults (no config file needed)
+beeport-stamp-stats fetch
+```
+
+### Environment Variables
+
+Override any config value using `BEEPORT__` prefix:
+
+```bash
+# Override RPC URL
+export BEEPORT__RPC__URL="https://rpc.gnosischain.com"
+
+# Override database path
+export BEEPORT__DATABASE__PATH="/data/stamps.db"
+
+# Override retry settings
+export BEEPORT__RETRY__MAX_RETRIES=10
+```
+
+### Adding New Contracts
+
+Simply add to your config file - no code changes needed:
+
+```yaml
+contracts:
+  - name: "MyNewContract"
+    contract_type: "MyNewContract"  # Must match implementation
+    address: "0x..."
+    deployment_block: 12345678
+```
+
+For implementation details, see [CLAUDE.md](./CLAUDE.md#adding-a-new-contract).
+
 ## Usage
 
 ### Commands
@@ -168,6 +250,88 @@ beeport-stamp-stats sync --from-block 38000000
 ```
 
 **Difference from `fetch`:** The `sync` command is optimized for keeping the database up to date without displaying events. Use `fetch` when you want to see the events as they're retrieved, and `sync` for background updates.
+
+### Understanding sync vs fetch
+
+While both commands update the database with blockchain events, they serve different purposes and have distinct behaviors:
+
+#### What sync does that fetch does not:
+
+**1. Caches the Current Storage Price** (src/cli.rs:843-844)
+
+After syncing events, `sync` queries and caches the current storage price from the blockchain:
+```rust
+let current_price = client.get_current_price().await?;
+cache.cache_price(current_price).await?;
+```
+This cached price is then used by other commands like `batch-status` and `expiry-analytics` for accurate TTL calculations.
+
+**2. Always Works Incrementally by Default** (src/cli.rs:790-798)
+
+`sync` automatically resumes from the last synced block without requiring any flags:
+```rust
+let from = from_block
+    .or_else(|| {
+        // Get last synced block from cache
+        futures::executor::block_on(cache.get_last_block())
+            .ok()
+            .flatten()
+            .map(|b| b + 1)
+    })
+    .unwrap_or(DEFAULT_START_BLOCK);
+```
+
+**3. Optimized for Routine Updates**
+
+- Uses hardcoded retry settings (5 retries, 100ms delay) suitable for normal syncing
+- Shows "Database is already up to date!" when there are no new events
+- Provides a simple summary output instead of detailed event listings
+- Minimal output - designed for scripts and cron jobs
+
+#### What fetch does that sync does not:
+
+**1. Displays Detailed Event Table** (src/cli.rs:516)
+
+`fetch` shows all retrieved events in a markdown table format with full details.
+
+**2. Configurable Retry Settings**
+
+`fetch` accepts `--max-retries` and `--initial-delay-ms` for customized retry behavior during large historical fetches where RPC issues are more likely.
+
+**3. Non-Incremental Mode**
+
+`fetch` can start from scratch or any specific block range. The `--incremental` flag must be explicitly provided for incremental behavior.
+
+**4. Detailed Progress Output**
+
+`fetch` provides verbose output about what's being retrieved, making it useful for monitoring large historical syncs.
+
+#### Summary
+
+**Use `sync` for:**
+- Daily/hourly automated database updates via cron
+- Keeping the database current with minimal output
+- Ensuring the price cache is updated for analytics commands
+- Background tasks where you don't need to see individual events
+
+**Use `fetch` for:**
+- Initial historical data loading
+- Investigating specific block ranges
+- Viewing detailed event information as it's retrieved
+- Custom retry configurations for unreliable RPC endpoints
+- When you want to see what's being synchronized
+
+**Example workflow:**
+```bash
+# Initial setup - fetch all historical data
+beeport-stamp-stats fetch --from-block 19275989
+
+# Daily automated updates (in crontab)
+0 */6 * * * /path/to/beeport-stamp-stats sync
+
+# Investigating recent activity
+beeport-stamp-stats fetch --from-block 38000000 --incremental
+```
 
 #### 5. Batch Status Analysis
 

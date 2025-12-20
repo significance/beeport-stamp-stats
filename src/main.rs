@@ -3,6 +3,7 @@ mod blockchain;
 mod cache;
 mod cli;
 mod commands;
+mod config;
 mod contracts;
 mod display;
 mod error;
@@ -10,6 +11,7 @@ mod events;
 mod export;
 mod hooks;
 mod price;
+mod retry;
 
 use anyhow::Result;
 use clap::Parser;

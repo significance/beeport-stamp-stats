@@ -38,19 +38,19 @@ impl Cache {
                         // Format: postgres://user:pass@host:port/database or postgres://user@host/database
                         let db_name = path_str
                             .split('/')
-                            .last()
+                            .next_back()
                             .and_then(|s| s.split('?').next())
                             .unwrap_or("beeport_stamps");
 
                         // Connect to default postgres database to create the target database
-                        let base_url = path_str.rsplitn(2, '/').nth(1).unwrap_or(&path_str);
-                        let postgres_url = format!("{}/postgres", base_url);
+                        let base_url = path_str.rsplit_once('/').map(|x| x.0).unwrap_or(&path_str);
+                        let postgres_url = format!("{base_url}/postgres");
 
                         tracing::debug!("Connecting to postgres database to create '{}'", db_name);
                         let admin_pool = sqlx::PgPool::connect(&postgres_url).await?;
 
                         // Create database (ignore error if it already exists)
-                        let create_query = format!("CREATE DATABASE {}", db_name);
+                        let create_query = format!("CREATE DATABASE {db_name}");
                         match sqlx::query(&create_query).execute(&admin_pool).await {
                             Ok(_) => tracing::info!("Database '{}' created successfully", db_name),
                             Err(e) if e.to_string().contains("already exists") => {
@@ -82,7 +82,7 @@ impl Cache {
                     std::fs::create_dir_all(parent)?;
                 }
 
-                format!("sqlite:{}", path_str)
+                format!("sqlite:{path_str}")
             };
 
             // Use SqliteConnectOptions to auto-create database file
@@ -297,7 +297,7 @@ impl Cache {
 
                     let timestamp: i64 = row.get("block_timestamp");
                     let block_timestamp =
-                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(|| Utc::now());
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
 
                     events.push(StampEvent {
                         event_type,
@@ -341,7 +341,7 @@ impl Cache {
 
                     let timestamp: i64 = row.get("block_timestamp");
                     let block_timestamp =
-                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(|| Utc::now());
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
 
                     events.push(StampEvent {
                         event_type,
@@ -398,7 +398,7 @@ impl Cache {
                         bucket_depth: row.get::<i64, _>("bucket_depth") as u8,
                         immutable: immutable != 0,
                         normalised_balance: row.get("normalised_balance"),
-                        created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(|| Utc::now()),
+                        created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(Utc::now),
                         block_number: block_number as u64,
                     });
                 }
@@ -431,7 +431,7 @@ impl Cache {
                         bucket_depth: row.get::<i64, _>("bucket_depth") as u8,
                         immutable: immutable != 0,
                         normalised_balance: row.get("normalised_balance"),
-                        created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(|| Utc::now()),
+                        created_at: DateTime::from_timestamp(created_at, 0).unwrap_or_else(Utc::now),
                         block_number: block_number as u64,
                     });
                 }

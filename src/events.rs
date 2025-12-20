@@ -1,9 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// Re-export from contracts module
-pub use crate::contracts::DEFAULT_START_BLOCK;
-
 /// Unified event type that can represent any PostageStamp event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StampEvent {
@@ -18,6 +15,7 @@ pub struct StampEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::enum_variant_names)]
 pub enum EventType {
     BatchCreated,
     BatchTopUp,
@@ -36,6 +34,7 @@ impl std::fmt::Display for EventType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[allow(clippy::enum_variant_names)]
 pub enum EventData {
     BatchCreated {
         total_amount: String,
@@ -111,11 +110,5 @@ mod tests {
 
         assert_eq!(event.batch_id, deserialized.batch_id);
         assert_eq!(event.block_number, deserialized.block_number);
-    }
-
-    #[test]
-    fn test_default_start_block() {
-        // Verify the default start block is set
-        assert!(DEFAULT_START_BLOCK > 0);
     }
 }

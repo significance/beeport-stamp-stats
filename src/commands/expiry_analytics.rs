@@ -109,22 +109,24 @@ impl ExpiryPeriod {
         } else if bytes >= KB {
             format!("{:.2} KB", bytes as f64 / KB as f64)
         } else {
-            format!("{} B", bytes)
+            format!("{bytes} B")
         }
     }
 }
 
 /// Execute the expiry analytics command
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     cache: Cache,
     blockchain_client: &BlockchainClient,
+    registry: &crate::contracts::ContractRegistry,
+    config: &crate::config::AppConfig,
     period: TimePeriod,
     output: OutputFormat,
     sort_by: ExpiryAnalyticsSortBy,
     price_override: Option<String>,
     price_change_str: Option<String>,
     refresh: bool,
-    max_retries: u32,
     cache_validity_blocks: u64,
 ) -> Result<()> {
     // Get all batches from cache
@@ -143,7 +145,7 @@ pub async fn execute(
             .map_err(|_| crate::error::StampError::Parse("Invalid price value".to_string()))?
     } else if refresh {
         // Refresh mode: fetch current price from blockchain and cache it
-        let price = blockchain_client.get_current_price().await?;
+        let price = blockchain_client.get_current_price(registry).await?;
         cache.cache_price(price).await?;
         price
     } else {
@@ -151,14 +153,14 @@ pub async fn execute(
         if let Some(cached_price) = cache.get_cached_price().await? {
             cached_price
         } else {
-            let price = blockchain_client.get_current_price().await?;
+            let price = blockchain_client.get_current_price(registry).await?;
             cache.cache_price(price).await?;
             price
         }
     };
 
     let price_config = if let Some(change_str) = price_change_str {
-        let price_change = PriceChange::from_str(&change_str)?;
+        let price_change = change_str.parse::<PriceChange>()?;
         PriceConfig::with_price_change(base_price, price_change)
     } else {
         PriceConfig::new(base_price)
@@ -208,7 +210,7 @@ pub async fn execute(
             // When refresh=true, always fetch from blockchain
             cache_misses += 1;
             let balance = blockchain_client
-                .get_remaining_balance(&batch.batch_id, max_retries, 100)
+                .get_remaining_balance(&batch.batch_id, registry, &config.retry)
                 .await
                 .unwrap_or_else(|e| {
                     // Only log if it's not the common "batch doesn't exist" error
@@ -245,7 +247,7 @@ pub async fn execute(
             price_config.base_price,
         )?;
 
-        let ttl_days_value = blocks_to_days(ttl_blocks);
+        let ttl_days_value = blocks_to_days(ttl_blocks, config.blockchain.block_time_seconds);
 
         // If price change is configured, recalculate with effective price
         let final_ttl_blocks = if let Some(ref price_change) = price_config.price_change {
@@ -310,7 +312,7 @@ pub async fn execute(
         OutputFormat::Table => {
             use tabled::Table;
             let table = Table::new(&periods).to_string();
-            println!("\n{}\n", table);
+            println!("\n{table}\n");
             let total_batches: usize = periods.iter().map(|p| p.batch_count).sum();
             let total_chunks: u128 = periods.iter().map(|p| p.chunks_raw).sum();
             println!(
@@ -322,7 +324,7 @@ pub async fn execute(
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&periods)?;
-            println!("{}", json);
+            println!("{json}");
         }
         OutputFormat::Csv => {
             let mut wtr = csv::Writer::from_writer(std::io::stdout());
