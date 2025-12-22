@@ -126,14 +126,15 @@ impl Cache {
             let event_type = event.event_type.to_string();
             let data = serde_json::to_string(&event.data)?;
             let timestamp = event.block_timestamp.timestamp();
+            let contract_address = event.contract_address.as_ref().map(|addr| addr.as_str());
 
             match &self.pool {
                 DatabasePool::Sqlite(pool) => {
                     sqlx::query(
                         r#"
                         INSERT OR REPLACE INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, data)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         "#,
                     )
                     .bind(&event_type)
@@ -143,6 +144,7 @@ impl Cache {
                     .bind(&event.transaction_hash)
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
+                    .bind(contract_address)
                     .bind(&data)
                     .execute(pool)
                     .await?;
@@ -151,14 +153,15 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, data)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                         ON CONFLICT (transaction_hash, log_index) DO UPDATE SET
                             event_type = EXCLUDED.event_type,
                             batch_id = EXCLUDED.batch_id,
                             block_number = EXCLUDED.block_number,
                             block_timestamp = EXCLUDED.block_timestamp,
                             contract_source = EXCLUDED.contract_source,
+                            contract_address = EXCLUDED.contract_address,
                             data = EXCLUDED.data
                         "#,
                     )
@@ -169,6 +172,7 @@ impl Cache {
                     .bind(&event.transaction_hash)
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
+                    .bind(contract_address)
                     .bind(&data)
                     .execute(pool)
                     .await?;
@@ -184,13 +188,14 @@ impl Cache {
     pub async fn store_storage_incentives_events(&self, events: &[StorageIncentivesEvent]) -> Result<()> {
         for event in events {
             let timestamp = event.block_timestamp.timestamp();
+            let contract_address = event.contract_address.as_ref().map(|addr| addr.as_str());
 
             match &self.pool {
                 DatabasePool::Sqlite(pool) => {
                     sqlx::query(
                         r#"
                         INSERT OR REPLACE INTO storage_incentives_events
-                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, event_type,
+                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, event_type,
                          round_number, phase, owner_address, overlay,
                          price, committed_stake, potential_stake, height, slash_amount, freeze_time, withdraw_amount,
                          stake, stake_density, reserve_commitment, depth,
@@ -198,7 +203,7 @@ impl Cache {
                          winner_overlay, winner_owner, winner_depth, winner_stake, winner_stake_density, winner_hash,
                          commit_count, reveal_count, chunk_count, redundancy_count,
                          chunk_index_in_rc, chunk_address)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         "#,
                     )
                     .bind(event.block_number as i64)
@@ -206,6 +211,7 @@ impl Cache {
                     .bind(&event.transaction_hash)
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
+                    .bind(contract_address)
                     .bind(&event.event_type)
                     .bind(event.round_number.map(|v| v as i64))
                     .bind(&event.phase)
@@ -244,7 +250,7 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT INTO storage_incentives_events
-                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, event_type,
+                        (block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, event_type,
                          round_number, phase, owner_address, overlay,
                          price, committed_stake, potential_stake, height, slash_amount, freeze_time, withdraw_amount,
                          stake, stake_density, reserve_commitment, depth,
@@ -252,11 +258,12 @@ impl Cache {
                          winner_overlay, winner_owner, winner_depth, winner_stake, winner_stake_density, winner_hash,
                          commit_count, reveal_count, chunk_count, redundancy_count,
                          chunk_index_in_rc, chunk_address)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37)
                         ON CONFLICT (transaction_hash, log_index) DO UPDATE SET
                             block_number = EXCLUDED.block_number,
                             block_timestamp = EXCLUDED.block_timestamp,
                             contract_source = EXCLUDED.contract_source,
+                            contract_address = EXCLUDED.contract_address,
                             event_type = EXCLUDED.event_type,
                             round_number = EXCLUDED.round_number,
                             phase = EXCLUDED.phase,
@@ -295,6 +302,7 @@ impl Cache {
                     .bind(&event.transaction_hash)
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
+                    .bind(contract_address)
                     .bind(&event.event_type)
                     .bind(event.round_number.map(|v| v as i64))
                     .bind(&event.phase)
@@ -463,6 +471,7 @@ impl Cache {
                         transaction_hash: row.get("transaction_hash"),
                         log_index: row.get::<i64, _>("log_index") as u64,
                         contract_source: row.get("contract_source"),
+                        contract_address: None, // Will be populated from database after migration
                         data,
                     });
                 }
@@ -507,6 +516,7 @@ impl Cache {
                         transaction_hash: row.get("transaction_hash"),
                         log_index: row.get::<i64, _>("log_index") as u64,
                         contract_source: row.get("contract_source"),
+                        contract_address: None, // Will be populated from database after migration
                         data,
                     });
                 }
@@ -945,6 +955,7 @@ mod tests {
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
+            contract_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -1002,6 +1013,7 @@ mod tests {
                 transaction_hash: "0xabcd1".to_string(),
                 log_index: 0,
                 contract_source: "PostageStamp".to_string(),
+                contract_address: None,
                 data: EventData::BatchCreated {
                     total_amount: "1000000000000000000".to_string(),
                     normalised_balance: "500000000000000000".to_string(),
@@ -1020,6 +1032,7 @@ mod tests {
                 transaction_hash: "0xabcd2".to_string(),
                 log_index: 0,
                 contract_source: "PostageStamp".to_string(),
+                contract_address: None,
                 data: EventData::BatchTopUp {
                     topup_amount: "100000000000000000".to_string(),
                     normalised_balance: "600000000000000000".to_string(),

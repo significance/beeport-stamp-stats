@@ -72,44 +72,165 @@ blockchain:
 # - contract_type: Implementation type (PostageStamp, StampsRegistry, PriceOracle, StakeRegistry, Redistribution)
 # - address: Contract address (hex with 0x prefix)
 # - deployment_block: Block number when contract was deployed
+# - version: (optional) Human-readable version (e.g., "v0.9.4", "Phase 4")
+# - active: (optional) Whether this is the currently active version (default: false)
+# - end_block: (optional) Last active block (when superseded or stopped)
+# - paused_at: (optional) Block when contract was paused
 #
 # Note: Events before deployment_block are not fetched.
 contracts:
-  # PostageStamp - Main contract for direct stamp purchases
+  # ========================================================================
+  # PostageStamp Contracts
+  # ========================================================================
+
+  # PostageStamp - Main contract for direct stamp purchases (CURRENT)
   - name: "PostageStamp"
     contract_type: "PostageStamp"
     address: "0x45a1502382541Cd610CC9068e88727426b696293"
     deployment_block: 31305656
+    version: "v0.8.6"
+    active: true
 
-  # StampsRegistry - UI-based stamp purchases with payer tracking
-  - name: "StampsRegistry"
-    contract_type: "StampsRegistry"
-    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
-    deployment_block: 42390510
+  # PostageStamp - Previous version (Phase 4)
+  - name: "PostageStamp-Phase4"
+    contract_type: "PostageStamp"
+    address: "0x30d155478eF27Ab32A1D578BE7b84BC5988aF381"
+    deployment_block: 25527076
+    version: "Phase 4"
+    active: false
+    end_block: 31305656
 
-  # PriceOracle - Dynamic price adjustment mechanism
-  - name: "PriceOracle"
-    contract_type: "PriceOracle"
-    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
-    deployment_block: 37339168
+  # ========================================================================
+  # Redistribution Contracts (Schelling coordination game)
+  # ========================================================================
 
-  # StakeRegistry - Node staking for redistribution game
-  - name: "StakeRegistry"
-    contract_type: "StakeRegistry"
-    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
-    deployment_block: 40430237
-
-  # Redistribution - Schelling coordination game for storage incentives
+  # Redistribution - Current version
   - name: "Redistribution"
     contract_type: "Redistribution"
     address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
     deployment_block: 41105199
+    version: "v0.9.4"
+    active: true
 
-  # To add a new contract, copy this template:
-  # - name: "MyContract"
-  #   contract_type: "MyContract"  # Must match implementation in code
-  #   address: "0x..."             # Contract address on Gnosis Chain
-  #   deployment_block: 12345678   # Deployment block number
+  # Redistribution - Previous versions
+  - name: "Redistribution-v0.9.3"
+    contract_type: "Redistribution"
+    address: "0x9f9A8dA5A0Db2611f9802ba1a0B99cC4A1c3b6A2"
+    deployment_block: 40430261
+    version: "v0.9.3"
+    active: false
+    end_block: 41105199
+    paused_at: 41150000
+
+  - name: "Redistribution-v0.9.2"
+    contract_type: "Redistribution"
+    address: "0x69C62CaCd68C2CBBf3D0C7502eF556DB3AC7889B"
+    deployment_block: 37339181
+    version: "v0.9.2"
+    active: false
+    end_block: 40430261
+
+  - name: "Redistribution-v0.9.1"
+    contract_type: "Redistribution"
+    address: "0xFfF73fd14537277B3F3807e1AB0F85E17c0ABea5"
+    deployment_block: 35961755
+    version: "v0.9.1"
+    active: false
+    end_block: 37339181
+
+  - name: "Redistribution-v0.8.6"
+    contract_type: "Redistribution"
+    address: "0xD9dFE7b0ddc7CcA41304FE9507ed823faD3bdBab"
+    deployment_block: 34159666
+    version: "v0.8.6"
+    active: false
+    end_block: 35961755
+
+  - name: "Redistribution-Phase4"
+    contract_type: "Redistribution"
+    address: "0x1F9a1FDe5c6350E949C5E4aa163B4c97011199B4"
+    deployment_block: 31305409
+    version: "Phase 4"
+    active: false
+    end_block: 34159666
+
+  # ========================================================================
+  # StakeRegistry Contracts (Node staking for redistribution game)
+  # ========================================================================
+
+  # StakeRegistry - Current version
+  - name: "StakeRegistry"
+    contract_type: "StakeRegistry"
+    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+    deployment_block: 40430237
+    version: "v0.9.3"
+    active: true
+
+  # StakeRegistry - Previous versions
+  - name: "StakeRegistry-v0.9.2"
+    contract_type: "StakeRegistry"
+    address: "0x445B848e16730988F871c4a09aB74526d27c2Ce8"
+    deployment_block: 37339175
+    version: "v0.9.2"
+    active: false
+    end_block: 40430237
+
+  - name: "StakeRegistry-v0.9.1"
+    contract_type: "StakeRegistry"
+    address: "0xBe212EA1A4978a64e8f7636Ae18305C38CA092Bd"
+    deployment_block: 35961749
+    version: "v0.9.1"
+    active: false
+    end_block: 37339175
+
+  - name: "StakeRegistry-v0.4.0"
+    contract_type: "StakeRegistry"
+    address: "0x781c6D1f0eaE6F1Da1F604c6cDCcdB8B76428ba7"
+    deployment_block: 25527075
+    version: "v0.4.0"
+    active: false
+    end_block: 35961749
+
+  # ========================================================================
+  # PriceOracle Contracts (Dynamic price adjustment mechanism)
+  # ========================================================================
+
+  # PriceOracle - Current version
+  - name: "PriceOracle"
+    contract_type: "PriceOracle"
+    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+    deployment_block: 37339168
+    version: "v0.9.2"
+    active: true
+
+  # PriceOracle - Previous versions
+  - name: "PriceOracle-v0.9.1"
+    contract_type: "PriceOracle"
+    address: "0x86DE783Bf23Bc13DaeF5A55ec531C198da8f10cF"
+    deployment_block: 31305665
+    version: "v0.9.1"
+    active: false
+    end_block: 37339168
+
+  - name: "PriceOracle-Phase4"
+    contract_type: "PriceOracle"
+    address: "0x344A2CC7304B32A87EfDC5407cD4bEC7cf98F035"
+    deployment_block: 25527079
+    version: "Phase 4"
+    active: false
+    end_block: 31305665
+
+  # ========================================================================
+  # StampsRegistry (UI-based stamp purchases with payer tracking)
+  # ========================================================================
+
+  # StampsRegistry - Only version (no historical versions)
+  - name: "StampsRegistry"
+    contract_type: "StampsRegistry"
+    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+    deployment_block: 42390510
+    version: "v1.0.0"
+    active: true
 
 # Retry Configuration
 # -------------------

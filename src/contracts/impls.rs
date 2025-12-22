@@ -76,6 +76,9 @@ impl Contract for PostageStampContract {
         log_index: u64,
     ) -> Result<Option<StampEvent>> {
         // Use dedicated PostageStamp parser
+        // Extract contract address from log for event attribution
+        let contract_address = crate::types::ContractAddress::new(format!("{:?}", log.address()))?;
+
         parse_postage_stamp_event(
             log,
             block_number,
@@ -83,6 +86,7 @@ impl Contract for PostageStampContract {
             transaction_hash,
             log_index,
             self.name(),
+            contract_address,
         )
     }
 
@@ -153,6 +157,9 @@ impl Contract for StampsRegistryContract {
         log_index: u64,
     ) -> Result<Option<StampEvent>> {
         // Use dedicated StampsRegistry parser
+        // Extract contract address from log for event attribution
+        let contract_address = crate::types::ContractAddress::new(format!("{:?}", log.address()))?;
+
         parse_stamps_registry_event(
             log,
             block_number,
@@ -160,6 +167,7 @@ impl Contract for StampsRegistryContract {
             transaction_hash,
             log_index,
             self.name(),
+            contract_address,
         )
     }
 
@@ -260,6 +268,9 @@ impl StorageIncentivesContract for PriceOracleContract {
         transaction_hash: TxHash,
         log_index: u64,
     ) -> Result<Option<StorageIncentivesEvent>> {
+        // Extract contract address from log for event attribution
+        let contract_address = crate::types::ContractAddress::new(format!("{:?}", log.address()))?;
+
         parse_price_oracle_event(
             log,
             block_number,
@@ -267,6 +278,7 @@ impl StorageIncentivesContract for PriceOracleContract {
             transaction_hash,
             log_index,
             self.name(),
+            contract_address,
         )
     }
 }
@@ -319,6 +331,9 @@ impl StorageIncentivesContract for StakeRegistryContract {
         transaction_hash: TxHash,
         log_index: u64,
     ) -> Result<Option<StorageIncentivesEvent>> {
+        // Extract contract address from log for event attribution
+        let contract_address = crate::types::ContractAddress::new(format!("{:?}", log.address()))?;
+
         parse_stake_registry_event(
             log,
             block_number,
@@ -326,6 +341,7 @@ impl StorageIncentivesContract for StakeRegistryContract {
             transaction_hash,
             log_index,
             self.name(),
+            contract_address,
         )
     }
 }
@@ -383,6 +399,9 @@ impl StorageIncentivesContract for RedistributionContract {
         transaction_hash: TxHash,
         log_index: u64,
     ) -> Result<Option<StorageIncentivesEvent>> {
+        // Extract contract address from log for event attribution
+        let contract_address = crate::types::ContractAddress::new(format!("{:?}", log.address()))?;
+
         parse_redistribution_event(
             log,
             block_number,
@@ -390,6 +409,7 @@ impl StorageIncentivesContract for RedistributionContract {
             transaction_hash,
             log_index,
             self.name(),
+            contract_address,
         )
     }
 }

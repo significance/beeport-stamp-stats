@@ -63,6 +63,7 @@ pub fn parse_postage_stamp_event(
     transaction_hash: TxHash,
     log_index: u64,
     contract_source: &str,
+    contract_address: crate::types::ContractAddress,
 ) -> Result<Option<StampEvent>> {
     // Try to parse as BatchCreated
     if let Ok(event) = abi::PostageStamp::BatchCreated::decode_log(&log.inner, true) {
@@ -74,6 +75,7 @@ pub fn parse_postage_stamp_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchCreated {
                 total_amount: event.totalAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -96,6 +98,7 @@ pub fn parse_postage_stamp_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchTopUp {
                 topup_amount: event.topupAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -114,6 +117,7 @@ pub fn parse_postage_stamp_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchDepthIncrease {
                 new_depth: event.newDepth,
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -137,6 +141,7 @@ pub fn parse_stamps_registry_event(
     transaction_hash: TxHash,
     log_index: u64,
     contract_source: &str,
+    contract_address: crate::types::ContractAddress,
 ) -> Result<Option<StampEvent>> {
     // Try to parse as BatchCreated
     if let Ok(event) = abi::StampsRegistry::BatchCreated::decode_log(&log.inner, true) {
@@ -148,6 +153,7 @@ pub fn parse_stamps_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchCreated {
                 total_amount: event.totalAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -170,6 +176,7 @@ pub fn parse_stamps_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchTopUp {
                 topup_amount: event.topupAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -188,6 +195,7 @@ pub fn parse_stamps_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             data: EventData::BatchDepthIncrease {
                 new_depth: event.newDepth,
                 normalised_balance: event.normalisedBalance.to_string(),
@@ -216,6 +224,7 @@ pub fn parse_price_oracle_event(
     transaction_hash: TxHash,
     log_index: u64,
     contract_source: &str,
+    contract_address: crate::types::ContractAddress,
 ) -> Result<Option<StorageIncentivesEvent>> {
     let round_number = Some(calculate_round_number(block_number));
 
@@ -227,6 +236,7 @@ pub fn parse_price_oracle_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "PriceUpdate".to_string(),
             round_number,
             phase: None,
@@ -269,6 +279,7 @@ pub fn parse_price_oracle_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "StampPriceUpdateFailed".to_string(),
             round_number,
             phase: None,
@@ -322,6 +333,7 @@ pub fn parse_stake_registry_event(
     transaction_hash: TxHash,
     log_index: u64,
     contract_source: &str,
+    contract_address: crate::types::ContractAddress,
 ) -> Result<Option<StorageIncentivesEvent>> {
     // Try to parse as StakeUpdated
     if let Ok(event) = abi::StakeRegistry::StakeUpdated::decode_log(&log.inner, true) {
@@ -331,6 +343,7 @@ pub fn parse_stake_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "StakeUpdated".to_string(),
             round_number: None,
             phase: None,
@@ -373,6 +386,7 @@ pub fn parse_stake_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "StakeSlashed".to_string(),
             round_number: None,
             phase: None,
@@ -415,6 +429,7 @@ pub fn parse_stake_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "StakeFrozen".to_string(),
             round_number: None,
             phase: None,
@@ -457,6 +472,7 @@ pub fn parse_stake_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "OverlayChanged".to_string(),
             round_number: None,
             phase: None,
@@ -499,6 +515,7 @@ pub fn parse_stake_registry_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "StakeWithdrawn".to_string(),
             round_number: None,
             phase: None,
@@ -551,6 +568,7 @@ pub fn parse_redistribution_event(
     transaction_hash: TxHash,
     log_index: u64,
     contract_source: &str,
+    contract_address: crate::types::ContractAddress,
 ) -> Result<Option<StorageIncentivesEvent>> {
     let round_number = Some(calculate_round_number(block_number));
     let phase = Some(calculate_phase(block_number).to_string());
@@ -563,6 +581,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "Committed".to_string(),
             round_number,
             phase,
@@ -605,6 +624,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "Revealed".to_string(),
             round_number,
             phase,
@@ -648,6 +668,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "WinnerSelected".to_string(),
             round_number,
             phase,
@@ -690,6 +711,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "TruthSelected".to_string(),
             round_number,
             phase,
@@ -732,6 +754,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "CurrentRevealAnchor".to_string(),
             round_number,
             phase,
@@ -774,6 +797,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "CountCommits".to_string(),
             round_number,
             phase,
@@ -816,6 +840,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "CountReveals".to_string(),
             round_number,
             phase,
@@ -858,6 +883,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "ChunkCount".to_string(),
             round_number,
             phase,
@@ -900,6 +926,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "PriceAdjustmentSkipped".to_string(),
             round_number,
             phase,
@@ -942,6 +969,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "WithdrawFailed".to_string(),
             round_number,
             phase,
@@ -984,6 +1012,7 @@ pub fn parse_redistribution_event(
             transaction_hash: format!("{transaction_hash:?}"),
             log_index,
             contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
             event_type: "transformedChunkAddressFromInclusionProof".to_string(),
             round_number,
             phase,

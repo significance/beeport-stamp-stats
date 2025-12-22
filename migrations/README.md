@@ -16,6 +16,8 @@ Migrations are named with the following format:
 For example:
 - `20251210000001_initial_schema.sql` - Initial database schema
 - `20251210000002_add_block_number_to_batches.sql` - Adds block_number column to batches table
+- `20251220000003_add_storage_incentives_events.sql` - Adds storage_incentives_events table
+- `20251221000004_add_contract_address.sql` - Adds contract_address column for multi-version support
 
 ## How Migrations Work
 

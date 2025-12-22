@@ -12,6 +12,7 @@ mod export;
 mod hooks;
 mod price;
 mod retry;
+mod types;
 
 use anyhow::Result;
 use clap::Parser;

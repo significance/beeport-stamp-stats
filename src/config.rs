@@ -95,10 +95,79 @@ pub struct ContractConfig {
 
     /// Block number when contract was deployed
     pub deployment_block: u64,
+
+    /// Optional: Human-readable version (e.g., "v0.9.4", "Phase 4")
+    #[serde(default)]
+    pub version: Option<String>,
+
+    /// Whether this is the currently active version (defaults to false)
+    #[serde(default)]
+    pub active: bool,
+
+    /// Optional: Last active block (when superseded or stopped)
+    #[serde(default)]
+    pub end_block: Option<u64>,
+
+    /// Optional: Block when contract was paused
+    #[serde(default)]
+    pub paused_at: Option<u64>,
 }
 
 // Re-export RetryConfig from retry module to avoid duplication
 pub use crate::retry::RetryConfig;
+
+impl ContractConfig {
+    /// Validate configuration
+    pub fn validate(&self) -> Result<(), String> {
+        use crate::types::ContractAddress;
+
+        // Validate address format
+        ContractAddress::new(&self.address)
+            .map_err(|e| format!("Invalid address in contract '{}': {}", self.name, e))?;
+
+        // Validate block numbers are logical
+        if let Some(end) = self.end_block
+            && end <= self.deployment_block
+        {
+            return Err(format!(
+                "Contract '{}': end_block ({}) must be after deployment_block ({})",
+                self.name, end, self.deployment_block
+            ));
+        }
+
+        if let Some(paused) = self.paused_at
+            && paused < self.deployment_block
+        {
+            return Err(format!(
+                "Contract '{}': paused_at ({}) cannot be before deployment_block ({})",
+                self.name, paused, self.deployment_block
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Convert to ContractMetadata
+    pub fn to_metadata(&self) -> Result<crate::contracts::metadata::ContractMetadata, String> {
+        use crate::types::{BlockNumber, ContractAddress, ContractVersion};
+
+        Ok(crate::contracts::metadata::ContractMetadata {
+            name: self.name.clone(),
+            contract_type: self.contract_type.clone(),
+            address: ContractAddress::new(&self.address)
+                .map_err(|e| format!("Invalid address: {e}"))?,
+            version: ContractVersion::new(
+                self.version
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            ),
+            deployment_block: BlockNumber(self.deployment_block),
+            end_block: self.end_block.map(BlockNumber),
+            active: self.active,
+            paused_at: self.paused_at.map(BlockNumber),
+        })
+    }
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -119,30 +188,50 @@ impl Default for AppConfig {
                     contract_type: "PostageStamp".to_string(),
                     address: "0x45a1502382541Cd610CC9068e88727426b696293".to_string(),
                     deployment_block: 31305656,
+                    version: Some("v0.8.6".to_string()),
+                    active: true,
+                    end_block: None,
+                    paused_at: None,
                 },
                 ContractConfig {
                     name: "StampsRegistry".to_string(),
                     contract_type: "StampsRegistry".to_string(),
                     address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3".to_string(),
                     deployment_block: 42390510,
+                    version: Some("v1.0.0".to_string()),
+                    active: true,
+                    end_block: None,
+                    paused_at: None,
                 },
                 ContractConfig {
                     name: "PriceOracle".to_string(),
                     contract_type: "PriceOracle".to_string(),
                     address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b".to_string(),
                     deployment_block: 37339168,
+                    version: Some("v0.9.2".to_string()),
+                    active: true,
+                    end_block: None,
+                    paused_at: None,
                 },
                 ContractConfig {
                     name: "StakeRegistry".to_string(),
                     contract_type: "StakeRegistry".to_string(),
                     address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4".to_string(),
                     deployment_block: 40430237,
+                    version: Some("v0.9.3".to_string()),
+                    active: true,
+                    end_block: None,
+                    paused_at: None,
                 },
                 ContractConfig {
                     name: "Redistribution".to_string(),
                     contract_type: "Redistribution".to_string(),
                     address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d".to_string(),
                     deployment_block: 41105199,
+                    version: Some("v0.9.4".to_string()),
+                    active: true,
+                    end_block: None,
+                    paused_at: None,
                 },
             ],
             retry: RetryConfig {

@@ -184,6 +184,10 @@ fn test_contract_config_creation() {
         contract_type: "PostageStamp".to_string(),
         address: "0x1234567890123456789012345678901234567890".to_string(),
         deployment_block: 12345,
+        version: Some("v1.0.0".to_string()),
+        active: true,
+        end_block: None,
+        paused_at: None,
     };
 
     assert_eq!(contract.name, "TestContract");

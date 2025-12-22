@@ -1,3 +1,4 @@
+use crate::types::ContractAddress;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +11,9 @@ pub struct StampEvent {
     pub block_timestamp: DateTime<Utc>,
     pub transaction_hash: String,
     pub log_index: u64,
-    pub contract_source: String, // Which contract emitted this event
+    pub contract_source: String, // Which contract emitted this event (e.g., "PostageStamp")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<ContractAddress>, // Actual on-chain address of the contract
     pub data: EventData,
 }
 
@@ -84,6 +87,8 @@ pub struct StorageIncentivesEvent {
     pub transaction_hash: String,
     pub log_index: u64,
     pub contract_source: String,  // 'PriceOracle', 'StakeRegistry', 'Redistribution'
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<ContractAddress>, // Actual on-chain address of the contract
     pub event_type: String,
 
     // Calculated/derived fields
@@ -159,6 +164,7 @@ mod tests {
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
+            contract_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),

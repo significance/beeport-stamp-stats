@@ -17,6 +17,7 @@ pub mod export;
 pub mod hooks;
 pub mod price;
 pub mod retry;
+pub mod types;
 
 // Re-export commonly used types
 pub use config::AppConfig;
@@ -24,3 +25,4 @@ pub use contracts::ContractRegistry;
 pub use error::{Result, StampError};
 pub use price::PriceConfig;
 pub use retry::RetryConfig;
+pub use types::{BlockNumber, ContractAddress, ContractVersion};

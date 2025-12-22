@@ -87,6 +87,7 @@ mod tests {
             transaction_hash: "0xabcd".to_string(),
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
+            contract_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -113,6 +114,7 @@ mod tests {
             transaction_hash: "0xdef0".to_string(),
             log_index: 0,
             contract_source: "StampsRegistry".to_string(),
+            contract_address: None,
             data: EventData::BatchCreated {
                 total_amount: "2000000000000000000".to_string(),
                 normalised_balance: "1000000000000000000".to_string(),

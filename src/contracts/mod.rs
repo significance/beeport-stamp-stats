@@ -11,8 +11,10 @@
 /// - `impls`: Concrete contract implementations
 /// - `parser`: Generic event parsing logic (eliminates duplication)
 /// - `abi`: Contract ABIs using sol! macro
+/// - `metadata`: Contract metadata and version information
 pub mod abi;
 pub mod impls;
+pub mod metadata;
 pub mod parser;
 
 // Contract implementations are available in the impls module
@@ -136,6 +138,9 @@ pub trait StorageIncentivesContract: Send + Sync {
 /// - Iteration over all contracts
 /// - Lookup by name
 /// - Lookup by capability (price query, balance query)
+/// - Lookup by address (for event attribution)
+/// - Lookup by block number (for historical queries)
+/// - Version management (active vs historical contracts)
 ///
 /// # Example
 ///
@@ -151,15 +156,32 @@ pub trait StorageIncentivesContract: Send + Sync {
 /// if let Some(contract) = registry.find_by_name("PostageStamp") {
 ///     println!("Found: {}", contract.address());
 /// }
+///
+/// // Find active contract at specific block
+/// if let Some(meta) = registry.find_active_at_block("Redistribution", BlockNumber(40500000)) {
+///     println!("Active version: {}", meta.version.as_str());
+/// }
 /// ```
 pub struct ContractRegistry {
     contracts: Vec<Box<dyn Contract>>,
+
+    // Metadata for all contracts (active + historical)
+    metadata: Vec<metadata::ContractMetadata>,
+
+    // Fast lookup: address → metadata index
+    address_map: std::collections::HashMap<crate::types::ContractAddress, usize>,
+
+    // Fast lookup: contract type → Vec<metadata index> (sorted by deployment block)
+    type_map: std::collections::HashMap<String, Vec<usize>>,
 }
 
 impl std::fmt::Debug for ContractRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContractRegistry")
             .field("contracts", &self.contracts.iter().map(|c| c.name()).collect::<Vec<_>>())
+            .field("metadata_count", &self.metadata.len())
+            .field("active_count", &self.metadata.iter().filter(|m| m.active).count())
+            .field("historical_count", &self.metadata.iter().filter(|m| !m.active).count())
             .finish()
     }
 }
@@ -169,6 +191,9 @@ impl ContractRegistry {
     pub fn new() -> Self {
         Self {
             contracts: Vec::new(),
+            metadata: Vec::new(),
+            address_map: std::collections::HashMap::new(),
+            type_map: std::collections::HashMap::new(),
         }
     }
 
@@ -232,6 +257,101 @@ impl ContractRegistry {
             .map(|b| b.as_ref())
     }
 
+    /// Find contract metadata by address
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Contract address to search for
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&ContractMetadata)` if found
+    /// - `None` if not found
+    #[allow(dead_code)]
+    pub fn find_by_address(&self, addr: &crate::types::ContractAddress) -> Option<&metadata::ContractMetadata> {
+        self.address_map.get(addr)
+            .map(|&idx| &self.metadata[idx])
+    }
+
+    /// Find active contract of a given type
+    ///
+    /// Returns the contract marked as `active: true` for the specified type.
+    ///
+    /// # Arguments
+    ///
+    /// * `contract_type` - Contract type to search for (e.g., "Redistribution")
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&ContractMetadata)` if found
+    /// - `None` if not found or no active contract of that type
+    #[allow(dead_code)]
+    pub fn find_active_by_type(&self, contract_type: &str) -> Option<&metadata::ContractMetadata> {
+        self.type_map.get(contract_type)?
+            .iter()
+            .find_map(|&idx| {
+                let meta = &self.metadata[idx];
+                if meta.active { Some(meta) } else { None }
+            })
+    }
+
+    /// Find which contract was active at a specific block
+    ///
+    /// Uses block ranges to determine which version was active at the given block.
+    ///
+    /// # Arguments
+    ///
+    /// * `contract_type` - Contract type to search for (e.g., "Redistribution")
+    /// * `block` - Block number to query
+    ///
+    /// # Returns
+    ///
+    /// - `Some(&ContractMetadata)` if found
+    /// - `None` if no contract was active at that block
+    #[allow(dead_code)]
+    pub fn find_active_at_block(
+        &self,
+        contract_type: &str,
+        block: crate::types::BlockNumber
+    ) -> Option<&metadata::ContractMetadata> {
+        self.type_map.get(contract_type)?
+            .iter()
+            .find_map(|&idx| {
+                let meta = &self.metadata[idx];
+                if meta.active_at_block(block) { Some(meta) } else { None }
+            })
+    }
+
+    /// Get all versions of a contract type, sorted by deployment block
+    ///
+    /// # Arguments
+    ///
+    /// * `contract_type` - Contract type to search for (e.g., "Redistribution")
+    ///
+    /// # Returns
+    ///
+    /// Vector of metadata references, sorted by deployment block (oldest first)
+    #[allow(dead_code)]
+    pub fn get_versions(&self, contract_type: &str) -> Vec<&metadata::ContractMetadata> {
+        self.type_map.get(contract_type)
+            .map(|indexes| {
+                indexes.iter()
+                    .map(|&idx| &self.metadata[idx])
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get all contract metadata (active + historical)
+    ///
+    /// # Returns
+    ///
+    /// Slice of all contract metadata
+    #[allow(dead_code)]
+    pub fn get_all_metadata(&self) -> &[metadata::ContractMetadata] {
+        &self.metadata
+    }
+
     /// Build a registry from configuration
     ///
     /// # Arguments
@@ -241,7 +361,7 @@ impl ContractRegistry {
     /// # Returns
     ///
     /// - `Ok(ContractRegistry)` if all contracts were successfully registered
-    /// - `Err(...)` if any contract type is unknown
+    /// - `Err(...)` if any contract type is unknown or validation fails
     ///
     /// # Example
     ///
@@ -251,8 +371,57 @@ impl ContractRegistry {
     /// ```
     pub fn from_config(config: &AppConfig) -> Result<Self> {
         let mut registry = Self::new();
+        let mut address_map = std::collections::HashMap::new();
+        let mut type_map: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
 
+        // First pass: Build metadata for ALL contracts (active + historical)
+        // and validate configuration
+        for (idx, contract_config) in config.contracts.iter().enumerate() {
+            // Validate configuration
+            contract_config.validate()
+                .map_err(crate::error::StampError::Config)?;
+
+            // Convert to metadata
+            let meta = contract_config.to_metadata()
+                .map_err(crate::error::StampError::Config)?;
+
+            // Check for duplicate addresses
+            if address_map.contains_key(&meta.address) {
+                return Err(crate::error::StampError::Config(format!(
+                    "Duplicate contract address '{}' for contract '{}'",
+                    meta.address.as_str(), meta.name
+                )));
+            }
+
+            // Add to address map
+            address_map.insert(meta.address.clone(), idx);
+
+            // Add to type map
+            type_map.entry(meta.contract_type.clone())
+                .or_default()
+                .push(idx);
+
+            // Store metadata
+            registry.metadata.push(meta);
+        }
+
+        // Sort type_map entries by deployment block
+        for indexes in type_map.values_mut() {
+            indexes.sort_by_key(|&idx| registry.metadata[idx].deployment_block);
+        }
+
+        // Store indexes
+        registry.address_map = address_map;
+        registry.type_map = type_map;
+
+        // Second pass: Build Contract trait objects for ACTIVE contracts only
+        // (only PostageStamp and StampsRegistry, not storage incentives)
         for contract_config in &config.contracts {
+            // Only create Contract trait objects for active PostageStamp/StampsRegistry
+            if !contract_config.active {
+                continue;
+            }
+
             let contract: Option<Box<dyn Contract>> = match contract_config.contract_type.as_str() {
                 "PostageStamp" => Some(Box::new(impls::PostageStampContract::new(
                     contract_config.address.clone(),
@@ -379,7 +548,7 @@ impl Default for StorageIncentivesContractRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, ContractConfig};
+    use crate::config::AppConfig;
 
     #[test]
     fn test_registry_creation() {
@@ -392,23 +561,46 @@ mod tests {
         let config = AppConfig::default();
         let registry = ContractRegistry::from_config(&config).unwrap();
 
-        // Default config has 2 contracts
+        // Default config has 2 ACTIVE PostageStamp/StampsRegistry contracts for trait objects
         assert_eq!(registry.all().len(), 2);
 
-        // Find by name
+        // Metadata includes ALL contracts in default config (5 active contracts)
+        // Note: config.yaml has 17 contracts, but AppConfig::default() only has 5
+        assert_eq!(registry.metadata.len(), 5);
+
+        // All 5 are active in default config
+        assert_eq!(registry.metadata.iter().filter(|m| m.active).count(), 5);
+
+        // Find by name (active contracts only for trait objects)
         assert!(registry.find_by_name("PostageStamp").is_some());
         assert!(registry.find_by_name("StampsRegistry").is_some());
         assert!(registry.find_by_name("UnknownContract").is_none());
+
+        // Find by address
+        let postage_addr = crate::types::ContractAddress::new("0x45a1502382541Cd610CC9068e88727426b696293").unwrap();
+        assert!(registry.find_by_address(&postage_addr).is_some());
+
+        // Find active by type
+        assert!(registry.find_active_by_type("PostageStamp").is_some());
+        assert!(registry.find_active_by_type("Redistribution").is_some());
+
+        // Get versions (only 1 Redistribution version in default config)
+        let redistribution_versions = registry.get_versions("Redistribution");
+        assert_eq!(redistribution_versions.len(), 1);
     }
 
     #[test]
     fn test_registry_unknown_contract_type() {
         let mut config = AppConfig::default();
-        config.contracts.push(ContractConfig {
+        config.contracts.push(crate::config::ContractConfig {
             name: "Unknown".to_string(),
             contract_type: "UnknownContract".to_string(),
             address: "0x1234567890123456789012345678901234567890".to_string(),
             deployment_block: 1000,
+            version: Some("v1.0.0".to_string()),
+            active: true,
+            end_block: None,
+            paused_at: None,
         });
 
         let result = ContractRegistry::from_config(&config);
