@@ -126,8 +126,18 @@ jobs:
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
         run: |
+          sudo dpkg --add-architecture arm64
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libssl-dev:arm64 pkg-config
+
+      - name: Set environment for ARM64 cross-compilation
+        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
 
       - name: Build binary
         run: cargo build --release --target ${{ matrix.platform.target }}
@@ -147,7 +157,7 @@ jobs:
           cd target/${{ matrix.platform.target }}/release
           $BINARY_NAME = "beeport-stamp-stats-${{ matrix.platform.name }}.exe"
           Copy-Item beeport-stamp-stats.exe $BINARY_NAME
-          Compress-Archive -Path $BINARY_NAME -DestinationPath "$BINARY_NAME.zip"
+          Compress-Archive -Path $BINARY_NAME -DestinationPath "$BINARY_NAME.zip" -Force
           (Get-FileHash "$BINARY_NAME.zip" -Algorithm SHA256).Hash | Out-File -Encoding ASCII "$BINARY_NAME.zip.sha256"
 
       - name: Upload artifact (Unix)
