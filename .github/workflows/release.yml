@@ -123,24 +123,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.platform.target }}-target-
 
-      - name: Install cross-compilation tools (Linux ARM64)
+      - name: Install cross for ARM64
         if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libssl-dev:arm64 pkg-config
-
-      - name: Set environment for ARM64 cross-compilation
-        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build binary
-        run: cargo build --release --target ${{ matrix.platform.target }}
+        run: |
+          if [ "${{ matrix.platform.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cross build --release --target ${{ matrix.platform.target }}
+          else
+            cargo build --release --target ${{ matrix.platform.target }}
+          fi
 
       - name: Prepare binary (Unix)
         if: runner.os != 'Windows'
