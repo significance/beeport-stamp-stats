@@ -69,7 +69,7 @@ pub fn parse_postage_stamp_event(
     if let Ok(event) = abi::PostageStamp::BatchCreated::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),
@@ -92,7 +92,7 @@ pub fn parse_postage_stamp_event(
     if let Ok(event) = abi::PostageStamp::BatchTopUp::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchTopUp,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),
@@ -111,7 +111,7 @@ pub fn parse_postage_stamp_event(
     if let Ok(event) = abi::PostageStamp::BatchDepthIncrease::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchDepthIncrease,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),
@@ -122,6 +122,59 @@ pub fn parse_postage_stamp_event(
                 new_depth: event.newDepth,
                 normalised_balance: event.normalisedBalance.to_string(),
                 payer: None, // PostageStamp doesn't have payer field
+            },
+        }));
+    }
+
+    // Try to parse as PotWithdrawn
+    if let Ok(event) = abi::PostageStamp::PotWithdrawn::decode_log(&log.inner, true) {
+        return Ok(Some(StampEvent {
+            event_type: EventType::PotWithdrawn,
+            batch_id: None, // PotWithdrawn events don't have a batch_id
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
+            data: EventData::PotWithdrawn {
+                recipient: format!("{:?}", event.recipient),
+                total_amount: event.totalAmount.to_string(),
+            },
+        }));
+    }
+
+    // Try to parse as PriceUpdate
+    if let Ok(event) = abi::PostageStamp::PriceUpdate::decode_log(&log.inner, true) {
+        return Ok(Some(StampEvent {
+            event_type: EventType::PriceUpdate,
+            batch_id: None, // PriceUpdate events don't have a batch_id
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
+            data: EventData::PriceUpdate {
+                price: event.price.to_string(),
+            },
+        }));
+    }
+
+    // Try to parse as CopyBatchFailed
+    if let Ok(event) = abi::PostageStamp::CopyBatchFailed::decode_log(&log.inner, true) {
+        return Ok(Some(StampEvent {
+            event_type: EventType::CopyBatchFailed,
+            batch_id: Some(format!("{:?}", event.batchId)),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            contract_source: contract_source.to_string(),
+            contract_address: Some(contract_address.clone()),
+            data: EventData::CopyBatchFailed {
+                index: event.index.to_string(),
+                batch_id: format!("{:?}", event.batchId),
             },
         }));
     }
@@ -147,7 +200,7 @@ pub fn parse_stamps_registry_event(
     if let Ok(event) = abi::StampsRegistry::BatchCreated::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),
@@ -170,7 +223,7 @@ pub fn parse_stamps_registry_event(
     if let Ok(event) = abi::StampsRegistry::BatchTopUp::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchTopUp,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),
@@ -189,7 +242,7 @@ pub fn parse_stamps_registry_event(
     if let Ok(event) = abi::StampsRegistry::BatchDepthIncrease::decode_log(&log.inner, true) {
         return Ok(Some(StampEvent {
             event_type: EventType::BatchDepthIncrease,
-            batch_id: format!("{:?}", event.batchId),
+            batch_id: Some(format!("{:?}", event.batchId)),
             block_number,
             block_timestamp,
             transaction_hash: format!("{transaction_hash:?}"),

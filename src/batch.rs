@@ -89,9 +89,14 @@ impl PeriodStatsBuilder {
             EventType::BatchCreated => self.batch_created_count += 1,
             EventType::BatchTopUp => self.batch_topup_count += 1,
             EventType::BatchDepthIncrease => self.batch_depth_increase_count += 1,
+            EventType::PotWithdrawn => {} // PotWithdrawn events don't affect batch stats
+            EventType::PriceUpdate => {} // PriceUpdate events don't affect batch stats
+            EventType::CopyBatchFailed => {} // CopyBatchFailed events don't affect batch stats
         }
 
-        self.batch_ids.insert(event.batch_id.clone());
+        if let Some(batch_id) = &event.batch_id {
+            self.batch_ids.insert(batch_id.clone());
+        }
     }
 
     fn build(self) -> PeriodStats {

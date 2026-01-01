@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StampEvent {
     pub event_type: EventType,
-    pub batch_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>, // Optional: some events like PotWithdrawn don't have a batch_id
     pub block_number: u64,
     pub block_timestamp: DateTime<Utc>,
     pub transaction_hash: String,
@@ -23,6 +24,9 @@ pub enum EventType {
     BatchCreated,
     BatchTopUp,
     BatchDepthIncrease,
+    PotWithdrawn,
+    PriceUpdate,
+    CopyBatchFailed,
 }
 
 impl std::fmt::Display for EventType {
@@ -31,6 +35,9 @@ impl std::fmt::Display for EventType {
             EventType::BatchCreated => write!(f, "BatchCreated"),
             EventType::BatchTopUp => write!(f, "BatchTopUp"),
             EventType::BatchDepthIncrease => write!(f, "BatchDepthIncrease"),
+            EventType::PotWithdrawn => write!(f, "PotWithdrawn"),
+            EventType::PriceUpdate => write!(f, "PriceUpdate"),
+            EventType::CopyBatchFailed => write!(f, "CopyBatchFailed"),
         }
     }
 }
@@ -57,6 +64,17 @@ pub enum EventData {
         new_depth: u8,
         normalised_balance: String,
         payer: Option<String>, // Only present in StampsRegistry events
+    },
+    PotWithdrawn {
+        recipient: String,
+        total_amount: String,
+    },
+    PriceUpdate {
+        price: String,
+    },
+    CopyBatchFailed {
+        index: String,
+        batch_id: String,
     },
 }
 

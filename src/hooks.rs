@@ -49,7 +49,7 @@ impl EventHook for StubHook {
 
     fn on_postage_stamp_event(&self, event: &StampEvent) {
         tracing::info!(
-            "PostageStamp contract: {} event for batch {} at block {}",
+            "PostageStamp contract: {} event for batch {:?} at block {}",
             event.event_type,
             event.batch_id,
             event.block_number
@@ -60,7 +60,7 @@ impl EventHook for StubHook {
 
     fn on_stamps_registry_event(&self, event: &StampEvent) {
         tracing::info!(
-            "StampsRegistry contract: {} event for batch {} at block {}",
+            "StampsRegistry contract: {} event for batch {:?} at block {}",
             event.event_type,
             event.batch_id,
             event.block_number

@@ -710,7 +710,7 @@ impl BlockchainClient {
                 } = &event.data
             {
                 batches.push(BatchInfo {
-                    batch_id: event.batch_id.clone(),
+                    batch_id: event.batch_id.clone().unwrap_or_default(),
                     owner: owner.clone(),
                     depth: *depth,
                     bucket_depth: *bucket_depth,

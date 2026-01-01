@@ -127,18 +127,33 @@ impl Cache {
             let data = serde_json::to_string(&event.data)?;
             let timestamp = event.block_timestamp.timestamp();
             let contract_address = event.contract_address.as_ref().map(|addr| addr.as_str());
+            let batch_id = event.batch_id.as_deref();
+
+            // Extract event-specific data
+            let (pot_recipient, pot_total_amount, price, copy_index, copy_batch_id) = match &event.data {
+                EventData::PotWithdrawn { recipient, total_amount } => {
+                    (Some(recipient.as_str()), Some(total_amount.as_str()), None, None, None)
+                }
+                EventData::PriceUpdate { price } => {
+                    (None, None, Some(price.as_str()), None, None)
+                }
+                EventData::CopyBatchFailed { index, batch_id } => {
+                    (None, None, None, Some(index.as_str()), Some(batch_id.as_str()))
+                }
+                _ => (None, None, None, None, None),
+            };
 
             match &self.pool {
                 DatabasePool::Sqlite(pool) => {
                     sqlx::query(
                         r#"
                         INSERT OR REPLACE INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         "#,
                     )
                     .bind(&event_type)
-                    .bind(&event.batch_id)
+                    .bind(batch_id)
                     .bind(event.block_number as i64)
                     .bind(timestamp)
                     .bind(&event.transaction_hash)
@@ -146,6 +161,11 @@ impl Cache {
                     .bind(&event.contract_source)
                     .bind(contract_address)
                     .bind(&data)
+                    .bind(pot_recipient)
+                    .bind(pot_total_amount)
+                    .bind(price)
+                    .bind(copy_index)
+                    .bind(copy_batch_id)
                     .execute(pool)
                     .await?;
                 }
@@ -153,8 +173,8 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                         ON CONFLICT (transaction_hash, log_index) DO UPDATE SET
                             event_type = EXCLUDED.event_type,
                             batch_id = EXCLUDED.batch_id,
@@ -162,11 +182,16 @@ impl Cache {
                             block_timestamp = EXCLUDED.block_timestamp,
                             contract_source = EXCLUDED.contract_source,
                             contract_address = EXCLUDED.contract_address,
-                            data = EXCLUDED.data
+                            data = EXCLUDED.data,
+                            pot_recipient = EXCLUDED.pot_recipient,
+                            pot_total_amount = EXCLUDED.pot_total_amount,
+                            price = EXCLUDED.price,
+                            copy_index = EXCLUDED.copy_index,
+                            copy_batch_id = EXCLUDED.copy_batch_id
                         "#,
                     )
                     .bind(&event_type)
-                    .bind(&event.batch_id)
+                    .bind(batch_id)
                     .bind(event.block_number as i64)
                     .bind(timestamp)
                     .bind(&event.transaction_hash)
@@ -174,6 +199,11 @@ impl Cache {
                     .bind(&event.contract_source)
                     .bind(contract_address)
                     .bind(&data)
+                    .bind(pot_recipient)
+                    .bind(pot_total_amount)
+                    .bind(price)
+                    .bind(copy_index)
+                    .bind(copy_batch_id)
                     .execute(pool)
                     .await?;
                 }

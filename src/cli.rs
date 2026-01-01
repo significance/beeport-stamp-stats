@@ -647,7 +647,7 @@ impl Cli {
 
         if let Some(ref filter) = batch_id_filter {
             let before = events.len();
-            events.retain(|e| e.batch_id.contains(filter));
+            events.retain(|e| e.batch_id.as_ref().is_some_and(|id| id.contains(filter)));
             tracing::info!("Batch ID filter: {} -> {} events", before, events.len());
 
             batches.retain(|b| b.batch_id.contains(filter));
@@ -697,7 +697,7 @@ impl Cli {
                 }
 
                 if let Some(ref filter) = batch_id_filter {
-                    events.retain(|e| e.batch_id.contains(filter));
+                    events.retain(|e| e.batch_id.as_ref().is_some_and(|id| id.contains(filter)));
                 }
 
                 if let Some(ref filter) = contract_filter {
@@ -727,7 +727,7 @@ impl Cli {
                 }
 
                 if let Some(ref filter) = batch_id_filter {
-                    events.retain(|e| e.batch_id.contains(filter));
+                    events.retain(|e| e.batch_id.as_ref().is_some_and(|id| id.contains(filter)));
                 }
 
                 if let Some(ref filter) = contract_filter {

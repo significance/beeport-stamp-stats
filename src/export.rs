@@ -68,7 +68,7 @@ fn export_events_csv<P: AsRef<Path>>(events: &[StampEvent], path: P) -> Result<(
             event.block_number,
             event.block_timestamp.to_rfc3339(),
             event.event_type,
-            event.batch_id,
+            event.batch_id.as_deref().unwrap_or("N/A"),
             event.transaction_hash,
             event.log_index,
             details.replace("\"", "\"\"")

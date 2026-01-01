@@ -38,7 +38,7 @@ pub fn display_events(events: &[StampEvent]) -> Result<()> {
             block: event.block_number.to_string(),
             event_type: event.event_type.to_string(),
             contract: truncate_contract_name(&event.contract_source),
-            batch_id: truncate_hash(&event.batch_id),
+            batch_id: event.batch_id.as_deref().map(truncate_hash).unwrap_or_else(|| "N/A".to_string()),
             details: format_event_details(&event.data),
             timestamp: event.block_timestamp.format("%Y-%m-%d %H:%M").to_string(),
         })
@@ -235,6 +235,15 @@ fn format_event_details(data: &EventData) -> String {
         }
         EventData::BatchDepthIncrease { new_depth, .. } => {
             format!("New Depth: {new_depth}")
+        }
+        EventData::PotWithdrawn { recipient, total_amount } => {
+            format!("Recipient: {}, Amount: {} BZZ", truncate_hash(recipient), format_amount(total_amount))
+        }
+        EventData::PriceUpdate { price } => {
+            format!("Price: {} PLUR", format_amount(price))
+        }
+        EventData::CopyBatchFailed { index, batch_id } => {
+            format!("Index: {}, Batch: {}", index, truncate_hash(batch_id))
         }
     }
 }
