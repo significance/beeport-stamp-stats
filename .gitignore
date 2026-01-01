@@ -23,3 +23,5 @@ stamp-cache.db
 # OS
 .DS_Store
 Thumbs.db
+beeport2_backup_*.sql
+*.db
