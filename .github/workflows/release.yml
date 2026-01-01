@@ -70,11 +70,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: linux-x86_64
 
-          # Linux ARM64
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
-            name: linux-aarch64
-
           # macOS x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
@@ -123,18 +118,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.platform.target }}-target-
 
-      - name: Install cross for ARM64
-        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build binary (ARM64 with cross)
-        if: matrix.platform.target == 'aarch64-unknown-linux-gnu'
-        env:
-          OPENSSL_STATIC: "1"
-        run: cross build --release --target ${{ matrix.platform.target }}
-
-      - name: Build binary (other platforms)
-        if: matrix.platform.target != 'aarch64-unknown-linux-gnu'
+      - name: Build binary
         run: cargo build --release --target ${{ matrix.platform.target }}
 
       - name: Prepare binary (Unix)
