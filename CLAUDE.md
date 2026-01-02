@@ -583,6 +583,61 @@ To add commands:
 
 ## Testing Strategy
 
+### Testing Database Convention
+
+**IMPORTANT: Always use PostgreSQL for testing, never SQLite**
+
+For all testing activities:
+- **Database name:** `beeport2_testing`
+- **Source database:** `beeport2` (production/main database)
+- **Reset procedure:** Always recreate `beeport2_testing` from `beeport2` at the start of every test run
+
+**CRITICAL: User Confirmation Required**
+
+Before creating or resetting the testing database, Claude MUST:
+
+1. **Always ask before copying from beeport2:**
+   - Check if `beeport2` database exists
+   - Ask user for explicit permission before copying data to `beeport2_testing`
+   - Example: "I need to reset the testing database. May I copy beeport2 to beeport2_testing?"
+
+2. **If beeport2 does not exist:**
+   - Notify the user that the source database doesn't exist
+   - Ask if they want Claude to create a fresh empty database
+   - Example: "The beeport2 database doesn't exist. Would you like me to create a new empty beeport2_testing database for testing?"
+
+**Standard test database setup:**
+```bash
+# Check if source database exists first
+psql -lqt | cut -d \| -f 1 | grep -qw beeport2
+
+# If it exists, drop and recreate testing database from production data
+psql -c "DROP DATABASE IF EXISTS beeport2_testing;"
+psql -c "CREATE DATABASE beeport2_testing TEMPLATE beeport2;"
+
+# If beeport2 doesn't exist, create fresh empty testing database
+psql -c "DROP DATABASE IF EXISTS beeport2_testing;"
+psql -c "CREATE DATABASE beeport2_testing;"
+```
+
+**Why this approach:**
+- Ensures consistent, known-good test data
+- Isolates testing from production database
+- Allows destructive testing without risk
+- Provides realistic data for comprehensive testing
+- Easy to reset to clean state
+- User maintains control over database operations
+
+**Usage in tests:**
+```bash
+# Example: Fetch command with testing database
+./target/release/beeport-stamp-stats \
+  --database-url "postgresql://localhost/beeport2_testing" \
+  fetch --from-block <start> --to-block <end>
+```
+
+---
+
 ### When to Request Comprehensive Testing
 
 After significant code changes (refactoring, new features, bug fixes), consider asking the user:
@@ -608,7 +663,13 @@ cargo clippy -- -D warnings
 
 #### 2. Fetch Command ✓
 ```bash
-./target/release/beeport-stamp-stats --cache-db ./test.db fetch --from-block <start> --to-block <end>
+# Reset testing database first
+psql -c "DROP DATABASE IF EXISTS beeport2_testing;"
+psql -c "CREATE DATABASE beeport2_testing TEMPLATE beeport2;"
+
+./target/release/beeport-stamp-stats \
+  --database-url "postgresql://localhost/beeport2_testing" \
+  fetch --from-block <start> --to-block <end>
 ```
 - Use a small block range (10-20 blocks)
 - Verify events are fetched correctly
@@ -628,7 +689,9 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 
 #### 4. Sync Command ✓
 ```bash
-./target/release/beeport-stamp-stats --cache-db ./test.db sync --from-block <next> --to-block <end>
+./target/release/beeport-stamp-stats \
+  --database-url "postgresql://localhost/beeport2_testing" \
+  sync --from-block <next> --to-block <end>
 ```
 - Verify incremental sync works
 - Check price caching
@@ -637,10 +700,11 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 #### 5. Summary Command with Filters ✓
 ```bash
 # Test all filter combinations
-./target/release/beeport-stamp-stats --cache-db ./test.db summary --months 0
-./target/release/beeport-stamp-stats --cache-db ./test.db summary --contract postage-stamp
-./target/release/beeport-stamp-stats --cache-db ./test.db summary --event-type batch-created
-./target/release/beeport-stamp-stats --cache-db ./test.db summary --batch-id <partial-id>
+DB="--database-url postgresql://localhost/beeport2_testing"
+./target/release/beeport-stamp-stats $DB summary --months 0
+./target/release/beeport-stamp-stats $DB summary --contract postage-stamp
+./target/release/beeport-stamp-stats $DB summary --event-type batch-created
+./target/release/beeport-stamp-stats $DB summary --batch-id <partial-id>
 ```
 - Verify filtering works correctly
 - Check contract source breakdown
@@ -649,11 +713,12 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 #### 6. Batch Status Command ✓
 ```bash
 # Test sorting and output formats
-./target/release/beeport-stamp-stats --cache-db ./test.db batch-status --sort-by ttl
-./target/release/beeport-stamp-stats --cache-db ./test.db batch-status --output json
-./target/release/beeport-stamp-stats --cache-db ./test.db batch-status --output csv
-./target/release/beeport-stamp-stats --cache-db ./test.db batch-status --price 200000
-./target/release/beeport-stamp-stats --cache-db ./test.db batch-status --price-change 100:7
+DB="--database-url postgresql://localhost/beeport2_testing"
+./target/release/beeport-stamp-stats $DB batch-status --sort-by ttl
+./target/release/beeport-stamp-stats $DB batch-status --output json
+./target/release/beeport-stamp-stats $DB batch-status --output csv
+./target/release/beeport-stamp-stats $DB batch-status --price 200000
+./target/release/beeport-stamp-stats $DB batch-status --price-change 100:7
 ```
 - Verify TTL calculations
 - Test price override
@@ -662,9 +727,10 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 
 #### 7. Expiry Analytics Command ✓
 ```bash
-./target/release/beeport-stamp-stats --cache-db ./test.db expiry-analytics --period week
-./target/release/beeport-stamp-stats --cache-db ./test.db expiry-analytics --period month
-./target/release/beeport-stamp-stats --cache-db ./test.db expiry-analytics --output json
+DB="--database-url postgresql://localhost/beeport2_testing"
+./target/release/beeport-stamp-stats $DB expiry-analytics --period week
+./target/release/beeport-stamp-stats $DB expiry-analytics --period month
+./target/release/beeport-stamp-stats $DB expiry-analytics --output json
 ```
 - Verify period grouping
 - Check storage calculations
@@ -673,8 +739,9 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 #### 8. Export Command ✓
 ```bash
 # Test both formats
-./target/release/beeport-stamp-stats --cache-db ./test.db export --output /tmp/test.json --format json
-./target/release/beeport-stamp-stats --cache-db ./test.db export --output /tmp/test.csv --format csv
+DB="--database-url postgresql://localhost/beeport2_testing"
+./target/release/beeport-stamp-stats $DB export --output /tmp/test.json --format json
+./target/release/beeport-stamp-stats $DB export --output /tmp/test.csv --format csv
 
 # Verify output
 jq 'length' /tmp/test.json
@@ -687,7 +754,9 @@ head /tmp/test.csv
 #### 9. Follow Mode ✓
 ```bash
 # Test briefly in background
-./target/release/beeport-stamp-stats --cache-db ./test.db follow --poll-interval 5 &
+./target/release/beeport-stamp-stats \
+  --database-url "postgresql://localhost/beeport2_testing" \
+  follow --poll-interval 5 &
 sleep 15
 kill $!
 ```
@@ -700,7 +769,7 @@ kill $!
 # Create test config file
 cat > test-config.yaml <<EOF
 database:
-  path: "./config-test.db"
+  url: "postgresql://localhost/beeport2_testing"
 blockchain:
   chunk_size: 1000
 EOF
@@ -709,10 +778,14 @@ EOF
 ./target/release/beeport-stamp-stats --config test-config.yaml fetch --from-block <start> --to-block <end>
 
 # Test environment variable override
-BEEPORT__DATABASE__PATH="/tmp/env-test.db" ./target/release/beeport-stamp-stats --config test-config.yaml fetch --from-block <start> --to-block <end>
+BEEPORT__DATABASE__URL="postgresql://localhost/beeport2_env_test" \
+  ./target/release/beeport-stamp-stats --config test-config.yaml fetch --from-block <start> --to-block <end>
 
 # Test CLI argument override (highest priority)
-BEEPORT__DATABASE__PATH="/tmp/env-test.db" ./target/release/beeport-stamp-stats --config test-config.yaml --cache-db /tmp/cli-test.db fetch --from-block <start> --to-block <end>
+BEEPORT__DATABASE__URL="postgresql://localhost/beeport2_env_test" \
+  ./target/release/beeport-stamp-stats --config test-config.yaml \
+  --database-url "postgresql://localhost/beeport2_testing" \
+  fetch --from-block <start> --to-block <end>
 ```
 - Verify config file loads correctly
 - Verify environment variable overrides config file
