@@ -953,6 +953,69 @@ impl Cache {
 
         Ok(())
     }
+
+    /// Get block timestamp from cached event data
+    ///
+    /// Checks both events and storage_incentives_events tables for any event with this block number.
+    /// Returns the timestamp if found, None if the block has never been fetched.
+    pub async fn get_block_timestamp(&self, block_number: u64) -> Result<Option<i64>> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                // Try events table first
+                let row = sqlx::query(
+                    "SELECT block_timestamp FROM events WHERE block_number = ? LIMIT 1"
+                )
+                .bind(block_number as i64)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    return Ok(Some(row.get("block_timestamp")));
+                }
+
+                // Try storage_incentives_events table
+                let row = sqlx::query(
+                    "SELECT block_timestamp FROM storage_incentives_events WHERE block_number = ? LIMIT 1"
+                )
+                .bind(block_number as i64)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    return Ok(Some(row.get("block_timestamp")));
+                }
+
+                Ok(None)
+            }
+            DatabasePool::Postgres(pool) => {
+                // Try events table first
+                let row = sqlx::query(
+                    "SELECT block_timestamp FROM events WHERE block_number = $1 LIMIT 1"
+                )
+                .bind(block_number as i64)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    return Ok(Some(row.get("block_timestamp")));
+                }
+
+                // Try storage_incentives_events table
+                let row = sqlx::query(
+                    "SELECT block_timestamp FROM storage_incentives_events WHERE block_number = $1 LIMIT 1"
+                )
+                .bind(block_number as i64)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    return Ok(Some(row.get("block_timestamp")));
+                }
+
+                Ok(None)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

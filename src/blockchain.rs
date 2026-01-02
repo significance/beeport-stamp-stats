@@ -229,6 +229,7 @@ impl BlockchainClient {
                     .parse_log(
                         contract,
                         log,
+                        cache,
                         &mut block_cache,
                         retry_config,
                     )
@@ -280,6 +281,7 @@ impl BlockchainClient {
         &self,
         contract: &dyn Contract,
         log: Log,
+        cache: &Cache,
         block_cache: &mut HashMap<u64, Block>,
         retry_config: &RetryConfig,
     ) -> Result<Option<StampEvent>> {
@@ -295,10 +297,14 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp from cache or fetch from RPC
-        let block = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT for block {}", block_number);
-            cached_block.clone()
+        // Get block timestamp - check in-memory cache first, then database, then RPC
+        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
+            let timestamp = cached_block.header.timestamp;
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
+            tracing::debug!("Block cache HIT (database) for block {}", block_number);
+            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
 
@@ -325,14 +331,13 @@ impl BlockchainClient {
                 .await
                 .map_err(StampError::Rpc)?;
 
-            // Store in cache for future use
-            block_cache.insert(block_number, fetched_block.clone());
-            fetched_block
-        };
+            let timestamp = fetched_block.header.timestamp;
 
-        let timestamp = block.header.timestamp;
-        let block_timestamp =
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now);
+            // Store in in-memory cache for future use in this session
+            block_cache.insert(block_number, fetched_block);
+
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        };
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)
@@ -519,6 +524,7 @@ impl BlockchainClient {
                     .parse_storage_incentives_log(
                         contract,
                         log,
+                        cache,
                         &mut block_cache,
                         retry_config,
                     )
@@ -570,6 +576,7 @@ impl BlockchainClient {
         &self,
         contract: &dyn StorageIncentivesContract,
         log: Log,
+        cache: &Cache,
         block_cache: &mut HashMap<u64, Block>,
         retry_config: &RetryConfig,
     ) -> Result<Option<StorageIncentivesEvent>> {
@@ -585,10 +592,14 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp from cache or fetch from RPC
-        let block = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT for block {}", block_number);
-            cached_block.clone()
+        // Get block timestamp - check in-memory cache first, then database, then RPC
+        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
+            let timestamp = cached_block.header.timestamp;
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
+            tracing::debug!("Block cache HIT (database) for block {}", block_number);
+            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
 
@@ -615,14 +626,13 @@ impl BlockchainClient {
                 .await
                 .map_err(StampError::Rpc)?;
 
-            // Store in cache for future use
-            block_cache.insert(block_number, fetched_block.clone());
-            fetched_block
-        };
+            let timestamp = fetched_block.header.timestamp;
 
-        let timestamp = block.header.timestamp;
-        let block_timestamp =
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now);
+            // Store in in-memory cache for future use in this session
+            block_cache.insert(block_number, fetched_block);
+
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        };
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)

@@ -19,25 +19,26 @@ def fetch_and_plot_metrics(export_filename=None):
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "5432")
 
-    queries = {
-        "Reveals": """
+    # Series to plot (comment out any you don't want)
+    series = [
+        ("Reveals", """
             SELECT block_number, reveal_count FROM storage_incentives_events
             WHERE event_type = 'CountReveals' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
-            )""",
-        "Commits": """
+            )"""),
+        ("Commits", """
             SELECT block_number, commit_count FROM storage_incentives_events
             WHERE event_type = 'CountCommits' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
-            )""",
-        "Price": "SELECT block_number, CAST(price AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'PriceUpdate'",
-        "Freeze Time": "SELECT block_number, CAST(freeze_time AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'StakeFrozen'",
-        "Chunks": """
+            )"""),
+        ("Price", "SELECT block_number, CAST(price AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'PriceUpdate'"),
+        ("Freeze Time", "SELECT block_number, CAST(freeze_time AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'StakeFrozen'"),
+        ("Chunks", """
             SELECT block_number, chunk_count FROM storage_incentives_events
             WHERE event_type = 'ChunkCount' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
-            )""",
-        "Frozen Events Count": """
+            )"""),
+        ("Frozen Events Count", """
             WITH WinnerEvents AS (
                 SELECT
                     block_number,
@@ -57,22 +58,55 @@ def fetch_and_plot_metrics(export_filename=None):
                       AND (s.block_number, s.log_index) <= (w.block_number, w.log_index)
                 ) AS frozen_stake_count
             FROM WinnerEvents w
-        """,
-        "Pot Withdrawn (log)": "SELECT block_number, CAST(pot_total_amount AS NUMERIC) FROM events WHERE event_type = 'PotWithdrawn' AND pot_total_amount IS NOT NULL"
-    }
+        """),
+        ("Pot Withdrawn (log)", "SELECT block_number, CAST(pot_total_amount AS NUMERIC) FROM events WHERE event_type = 'PotWithdrawn' AND pot_total_amount IS NOT NULL"),
+        ("Reward per Node (Raw)", """
+            SELECT
+                pw.block_number,
+                CAST(pw.pot_total_amount AS NUMERIC) as pot_amount,
+                COALESCE(cc.commit_count, 0) as commit_count
+            FROM events pw
+            LEFT JOIN storage_incentives_events cc
+                ON pw.block_number = cc.block_number
+                AND cc.event_type = 'CountCommits'
+            WHERE pw.event_type = 'PotWithdrawn'
+                AND pw.pot_total_amount IS NOT NULL
+            ORDER BY pw.block_number
+        """),
+    ]
+
+    queries = dict(series)
 
     try:
         conn = psycopg2.connect(dbname=dbname, user=user, password=password, host=host, port=port)
+
+        # EXTRACT & TRANSFORM: Load raw data from database
         dataframes = {}
         for label, sql in queries.items():
             df = pd.read_sql(sql, conn)
             if not df.empty:
-                dataframes[label] = df.set_index('block_number').sort_index()
+                # Multi-column queries handled in LOAD phase
+                if label == "Reward per Node (Raw)":
+                    dataframes[label] = df
+                else:
+                    dataframes[label] = df.set_index('block_number').sort_index()
         conn.close()
 
         if not dataframes:
             print("No data found.")
             return
+
+        # LOAD: Process and derive metrics
+        if "Reward per Node (Raw)" in dataframes:
+            raw_df = dataframes.pop("Reward per Node (Raw)")
+
+            # 10-round moving average: sum(pot_withdrawn) / sum(commits)
+            window = 10
+            raw_df['pot_sum'] = raw_df['pot_amount'].rolling(window=window, min_periods=1).sum()
+            raw_df['commit_sum'] = raw_df['commit_count'].rolling(window=window, min_periods=1).sum()
+            raw_df['reward_per_node'] = raw_df['pot_sum'] / raw_df['commit_sum'].replace(0, np.nan)
+
+            dataframes['Reward per Node'] = raw_df.set_index('block_number')[['reward_per_node']].dropna()
 
         all_indices = pd.concat([df.index.to_series() for df in dataframes.values()])
         min_block, max_block = int(all_indices.min()), int(all_indices.max())
@@ -127,6 +161,9 @@ def fetch_and_plot_metrics(export_filename=None):
                     # Diamond marker, half size, logarithmic scale
                     item = ax.scatter(x, y, color=color, label=label, s=25, marker='D', edgecolors='none', alpha=0.6, zorder=3)
                     ax.set_yscale('log')
+                elif label == "Reward per Node":
+                    # White cross marker
+                    item = ax.scatter(x, y, color='white', label=label, s=50, marker='+', edgecolors='none', alpha=0.8, zorder=3)
                 else:
                     item = ax.scatter(x, y, color=color, label=label, s=50, edgecolors='none', alpha=0.6, zorder=3)
                 lines_and_scatters.append(item)
