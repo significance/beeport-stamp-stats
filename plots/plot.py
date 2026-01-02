@@ -21,25 +21,25 @@ def fetch_and_plot_metrics(export_filename=None):
 
     queries = {
         "Reveals": """
-            SELECT block_number, reveal_count FROM storage_incentives_events 
+            SELECT block_number, reveal_count FROM storage_incentives_events
             WHERE event_type = 'CountReveals' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
             )""",
         "Commits": """
-            SELECT block_number, commit_count FROM storage_incentives_events 
+            SELECT block_number, commit_count FROM storage_incentives_events
             WHERE event_type = 'CountCommits' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
             )""",
         "Price": "SELECT block_number, CAST(price AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'PriceUpdate'",
         "Freeze Time": "SELECT block_number, CAST(freeze_time AS NUMERIC) FROM storage_incentives_events WHERE event_type = 'StakeFrozen'",
         "Chunks": """
-            SELECT block_number, chunk_count FROM storage_incentives_events 
+            SELECT block_number, chunk_count FROM storage_incentives_events
             WHERE event_type = 'ChunkCount' AND block_number IN (
                 SELECT block_number FROM storage_incentives_events WHERE event_type = 'WinnerSelected'
             )""",
         "Frozen Events Count": """
             WITH WinnerEvents AS (
-                SELECT 
+                SELECT
                     block_number,
                     log_index,
                     LAG(block_number) OVER (ORDER BY block_number, log_index) AS prev_block,
@@ -47,17 +47,18 @@ def fetch_and_plot_metrics(export_filename=None):
                 FROM storage_incentives_events
                 WHERE event_type = 'WinnerSelected'
             )
-            SELECT 
-                w.block_number, 
+            SELECT
+                w.block_number,
                 (
-                    SELECT COUNT(*) 
-                    FROM storage_incentives_events s 
+                    SELECT COUNT(*)
+                    FROM storage_incentives_events s
                     WHERE s.event_type = 'StakeFrozen'
                       AND (s.block_number, s.log_index) > (COALESCE(w.prev_block, 0), COALESCE(w.prev_log_idx, -1))
                       AND (s.block_number, s.log_index) <= (w.block_number, w.log_index)
                 ) AS frozen_stake_count
             FROM WinnerEvents w
-        """
+        """,
+        "Pot Withdrawn (log)": "SELECT block_number, CAST(pot_total_amount AS NUMERIC) FROM events WHERE event_type = 'PotWithdrawn' AND pot_total_amount IS NOT NULL"
     }
 
     try:
@@ -122,7 +123,12 @@ def fetch_and_plot_metrics(export_filename=None):
                     lines_and_scatters.extend(item)
             else:
                 # Set zorder lower (default is ~2) so they sit behind Price
-                item = ax.scatter(x, y, color=color, label=label, s=50, edgecolors='none', alpha=0.6, zorder=3)
+                if label == "Pot Withdrawn (log)":
+                    # Diamond marker, half size, logarithmic scale
+                    item = ax.scatter(x, y, color=color, label=label, s=25, marker='D', edgecolors='none', alpha=0.6, zorder=3)
+                    ax.set_yscale('log')
+                else:
+                    item = ax.scatter(x, y, color=color, label=label, s=50, edgecolors='none', alpha=0.6, zorder=3)
                 lines_and_scatters.append(item)
                 ax.set_ylabel(label, color=color, fontweight='bold', fontsize=9)
                 ax.tick_params(axis='y', labelcolor=color)

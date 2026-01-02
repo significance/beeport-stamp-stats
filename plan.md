@@ -16,6 +16,7 @@ All core features implemented and tested:
 - ✅ Retry logic with exponential backoff (HTTP 429 + 502)
 - ✅ 132 tests passing, zero clippy warnings
 - ✅ 100% blockchain data accuracy verified against GnosisScan
+- ✅ Visualization: plots/plot.py includes PotWithdrawn events
 
 **Ready for:** Data collection, analysis, production deployment
 
