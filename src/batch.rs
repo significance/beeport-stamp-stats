@@ -146,7 +146,7 @@ mod tests {
         let events = vec![
             StampEvent {
                 event_type: EventType::BatchCreated,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 1000,
                 block_timestamp: Utc.with_ymd_and_hms(2025, 3, 15, 12, 0, 0).unwrap(),
                 transaction_hash: "0xabcd1".to_string(),
@@ -165,7 +165,7 @@ mod tests {
             },
             StampEvent {
                 event_type: EventType::BatchTopUp,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 1001,
                 block_timestamp: Utc.with_ymd_and_hms(2025, 3, 15, 13, 0, 0).unwrap(),
                 transaction_hash: "0xabcd2".to_string(),

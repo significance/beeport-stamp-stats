@@ -979,7 +979,7 @@ mod tests {
 
         let events = vec![StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: "0x1234".to_string(),
+            batch_id: Some("0x1234".to_string()),
             block_number: 1000,
             block_timestamp: Utc::now(),
             transaction_hash: "0xabcd".to_string(),
@@ -1002,7 +1002,7 @@ mod tests {
 
         let retrieved = cache.get_events(0).await.unwrap();
         assert_eq!(retrieved.len(), 1);
-        assert_eq!(retrieved[0].batch_id, "0x1234");
+        assert_eq!(retrieved[0].batch_id, Some("0x1234".to_string()));
     }
 
     #[tokio::test]
@@ -1037,7 +1037,7 @@ mod tests {
         let events = vec![
             StampEvent {
                 event_type: EventType::BatchCreated,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 1000,
                 block_timestamp: Utc::now(),
                 transaction_hash: "0xabcd1".to_string(),
@@ -1056,7 +1056,7 @@ mod tests {
             },
             StampEvent {
                 event_type: EventType::BatchTopUp,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 2000,
                 block_timestamp: Utc::now(),
                 transaction_hash: "0xabcd2".to_string(),

@@ -81,7 +81,7 @@ mod tests {
         let hook = StubHook;
         let event = StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: "0x1234".to_string(),
+            batch_id: Some("0x1234".to_string()),
             block_number: 1000,
             block_timestamp: Utc::now(),
             transaction_hash: "0xabcd".to_string(),
@@ -108,7 +108,7 @@ mod tests {
         let hook = StubHook;
         let event = StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: "0x5678".to_string(),
+            batch_id: Some("0x5678".to_string()),
             block_number: 2000,
             block_timestamp: Utc::now(),
             transaction_hash: "0xdef0".to_string(),

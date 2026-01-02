@@ -70,6 +70,10 @@ pub enum Commands {
         #[arg(long, default_value = "false")]
         incremental: bool,
 
+        /// Reprocess blocks even if they have been cached (useful after adding new event types)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
         /// Maximum number of retries for rate-limited requests
         #[arg(long, default_value = "5")]
         max_retries: u32,
@@ -157,6 +161,10 @@ pub enum Commands {
         /// Specific contract to sync (defaults to all contracts)
         #[arg(long)]
         contract: Option<String>,
+
+        /// Reprocess blocks even if they have been cached (useful after adding new event types)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
     },
 
     /// Display batch status with TTL and expiry information
@@ -380,6 +388,7 @@ impl Cli {
                 from_block,
                 to_block,
                 incremental,
+                refresh,
                 max_retries: _,  // Ignored, use config
                 initial_delay_ms: _,  // Ignored, use config
             } => {
@@ -392,6 +401,7 @@ impl Cli {
                     *from_block,
                     *to_block,
                     *incremental,
+                    *refresh,
                 )
                 .await
             }
@@ -444,6 +454,7 @@ impl Cli {
                 from_block,
                 to_block,
                 contract,
+                refresh,
             } => {
                 self.execute_sync(
                     cache,
@@ -453,6 +464,7 @@ impl Cli {
                     *from_block,
                     *to_block,
                     contract.clone(),
+                    *refresh,
                 )
                 .await
             }
@@ -523,6 +535,7 @@ impl Cli {
         from_block: Option<u64>,
         to_block: Option<u64>,
         incremental: bool,
+        refresh: bool,
     ) -> Result<()> {
         tracing::info!("Fetching events from blockchain...");
 
@@ -560,6 +573,7 @@ impl Cli {
                 registry,
                 &config.blockchain,
                 &config.retry,
+                refresh,
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
@@ -595,6 +609,7 @@ impl Cli {
                 si_registry,
                 &config.blockchain,
                 &config.retry,
+                refresh,
                 |chunk_events: Vec<crate::events::StorageIncentivesEvent>| {
                     let cache = cache_clone.clone();
                     async move {
@@ -781,6 +796,7 @@ impl Cli {
                 registry,
                 &config.blockchain,
                 &config.retry,
+                false, // Don't refresh in follow mode - always fetching new events
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
@@ -841,6 +857,7 @@ impl Cli {
                     registry,
                     &config.blockchain,
                     &config.retry,
+                    false, // Don't refresh in follow mode - always fetching new events
                     |chunk_events| {
                         let cache = cache_clone.clone();
                         let client = client_clone.clone();
@@ -914,6 +931,7 @@ impl Cli {
         from_block: Option<u64>,
         to_block: Option<u64>,
         _contract: Option<String>,
+        refresh: bool,
     ) -> Result<()> {
         tracing::info!("Syncing database with blockchain...");
 
@@ -951,6 +969,7 @@ impl Cli {
                 registry,
                 &config.blockchain,
                 &config.retry,
+                refresh,
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();

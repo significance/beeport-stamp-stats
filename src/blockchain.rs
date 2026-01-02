@@ -37,6 +37,8 @@ impl BlockchainClient {
     ///
     /// The `on_chunk_complete` callback is called after each chunk is fetched and can be used
     /// to store events incrementally to avoid data loss on interruption.
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     pub async fn fetch_batch_events<F, Fut>(
         &self,
@@ -46,6 +48,7 @@ impl BlockchainClient {
         registry: &ContractRegistry,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StampEvent>>
     where
@@ -64,6 +67,7 @@ impl BlockchainClient {
                     cache,
                     blockchain_config,
                     retry_config,
+                    refresh,
                     on_chunk_complete,
                 )
                 .await?;
@@ -94,6 +98,8 @@ impl BlockchainClient {
     ///
     /// The `on_chunk_complete` callback is called after each chunk is fetched with the events
     /// from that chunk, allowing for incremental storage.
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     async fn fetch_contract_events<F, Fut>(
         &self,
@@ -103,6 +109,7 @@ impl BlockchainClient {
         cache: &Cache,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StampEvent>>
     where
@@ -164,8 +171,8 @@ impl BlockchainClient {
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
-            // Check if chunk is already cached
-            if cache.is_chunk_cached(&chunk_hash).await? {
+            // Check if chunk is already cached (skip check if refresh mode enabled)
+            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
                 tracing::info!(
                     "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
                     contract.name(),
@@ -344,6 +351,7 @@ impl BlockchainClient {
         registry: &StorageIncentivesContractRegistry,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StorageIncentivesEvent>>
     where
@@ -362,6 +370,7 @@ impl BlockchainClient {
                     cache,
                     blockchain_config,
                     retry_config,
+                    refresh,
                     on_chunk_complete,
                 )
                 .await?;
@@ -379,6 +388,8 @@ impl BlockchainClient {
     }
 
     /// Fetch events from a specific storage incentives contract
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     async fn fetch_storage_incentives_contract_events<F, Fut>(
         &self,
@@ -388,6 +399,7 @@ impl BlockchainClient {
         cache: &Cache,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StorageIncentivesEvent>>
     where
@@ -449,8 +461,8 @@ impl BlockchainClient {
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
-            // Check if chunk is already cached
-            if cache.is_chunk_cached(&chunk_hash).await? {
+            // Check if chunk is already cached (skip check if refresh mode enabled)
+            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
                 tracing::info!(
                     "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
                     contract.name(),

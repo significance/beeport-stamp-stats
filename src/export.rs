@@ -163,7 +163,7 @@ mod tests {
     fn test_export_events_json() {
         let events = vec![StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: "0x1234".to_string(),
+            batch_id: Some("0x1234".to_string()),
             block_number: 1000,
             block_timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             transaction_hash: "0xabcd".to_string(),
@@ -193,7 +193,7 @@ mod tests {
     fn test_export_events_csv() {
         let events = vec![StampEvent {
             event_type: EventType::BatchCreated,
-            batch_id: "0x1234".to_string(),
+            batch_id: Some("0x1234".to_string()),
             block_number: 1000,
             block_timestamp: Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap(),
             transaction_hash: "0xabcd".to_string(),

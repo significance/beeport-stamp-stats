@@ -101,8 +101,9 @@ impl RetryConfig {
                     Err(e) => {
                         let error_msg = e.to_string();
 
-                        // Check if this is a rate limit error
-                        if error_msg.contains("429") || error_msg.contains("Too Many Requests") {
+                        // Check if this is a rate limit or gateway error
+                        if error_msg.contains("429") || error_msg.contains("Too Many Requests")
+                            || error_msg.contains("502") || error_msg.contains("Bad Gateway") {
                             if retries < self.max_retries {
                                 // Calculate exponential backoff delay
                                 let delay_ms = self
@@ -111,7 +112,7 @@ impl RetryConfig {
 
                                 let now = chrono::Local::now().format("%H:%M:%S");
                                 tracing::debug!(
-                                    "[{}] Rate limited (429), retrying after {}ms (attempt {}/{})",
+                                    "[{}] Retryable error (429/502), retrying after {}ms (attempt {}/{})",
                                     now,
                                     delay_ms,
                                     retries + 1,
