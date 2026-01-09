@@ -23,3 +23,5 @@ stamp-cache.db
 # OS
 .DS_Store
 Thumbs.db
+*.sql
+*.db

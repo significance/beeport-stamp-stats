@@ -37,6 +37,8 @@ impl BlockchainClient {
     ///
     /// The `on_chunk_complete` callback is called after each chunk is fetched and can be used
     /// to store events incrementally to avoid data loss on interruption.
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     pub async fn fetch_batch_events<F, Fut>(
         &self,
@@ -46,6 +48,7 @@ impl BlockchainClient {
         registry: &ContractRegistry,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StampEvent>>
     where
@@ -64,6 +67,7 @@ impl BlockchainClient {
                     cache,
                     blockchain_config,
                     retry_config,
+                    refresh,
                     on_chunk_complete,
                 )
                 .await?;
@@ -94,6 +98,8 @@ impl BlockchainClient {
     ///
     /// The `on_chunk_complete` callback is called after each chunk is fetched with the events
     /// from that chunk, allowing for incremental storage.
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     async fn fetch_contract_events<F, Fut>(
         &self,
@@ -103,6 +109,7 @@ impl BlockchainClient {
         cache: &Cache,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StampEvent>>
     where
@@ -164,8 +171,8 @@ impl BlockchainClient {
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
-            // Check if chunk is already cached
-            if cache.is_chunk_cached(&chunk_hash).await? {
+            // Check if chunk is already cached (skip check if refresh mode enabled)
+            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
                 tracing::info!(
                     "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
                     contract.name(),
@@ -222,6 +229,7 @@ impl BlockchainClient {
                     .parse_log(
                         contract,
                         log,
+                        cache,
                         &mut block_cache,
                         retry_config,
                     )
@@ -273,6 +281,7 @@ impl BlockchainClient {
         &self,
         contract: &dyn Contract,
         log: Log,
+        cache: &Cache,
         block_cache: &mut HashMap<u64, Block>,
         retry_config: &RetryConfig,
     ) -> Result<Option<StampEvent>> {
@@ -288,10 +297,14 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp from cache or fetch from RPC
-        let block = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT for block {}", block_number);
-            cached_block.clone()
+        // Get block timestamp - check in-memory cache first, then database, then RPC
+        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
+            let timestamp = cached_block.header.timestamp;
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
+            tracing::debug!("Block cache HIT (database) for block {}", block_number);
+            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
 
@@ -318,14 +331,13 @@ impl BlockchainClient {
                 .await
                 .map_err(StampError::Rpc)?;
 
-            // Store in cache for future use
-            block_cache.insert(block_number, fetched_block.clone());
-            fetched_block
-        };
+            let timestamp = fetched_block.header.timestamp;
 
-        let timestamp = block.header.timestamp;
-        let block_timestamp =
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now);
+            // Store in in-memory cache for future use in this session
+            block_cache.insert(block_number, fetched_block);
+
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        };
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)
@@ -344,6 +356,7 @@ impl BlockchainClient {
         registry: &StorageIncentivesContractRegistry,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StorageIncentivesEvent>>
     where
@@ -362,6 +375,7 @@ impl BlockchainClient {
                     cache,
                     blockchain_config,
                     retry_config,
+                    refresh,
                     on_chunk_complete,
                 )
                 .await?;
@@ -379,6 +393,8 @@ impl BlockchainClient {
     }
 
     /// Fetch events from a specific storage incentives contract
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
     async fn fetch_storage_incentives_contract_events<F, Fut>(
         &self,
@@ -388,6 +404,7 @@ impl BlockchainClient {
         cache: &Cache,
         blockchain_config: &BlockchainConfig,
         retry_config: &RetryConfig,
+        refresh: bool,
         on_chunk_complete: F,
     ) -> Result<Vec<StorageIncentivesEvent>>
     where
@@ -449,8 +466,8 @@ impl BlockchainClient {
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
-            // Check if chunk is already cached
-            if cache.is_chunk_cached(&chunk_hash).await? {
+            // Check if chunk is already cached (skip check if refresh mode enabled)
+            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
                 tracing::info!(
                     "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
                     contract.name(),
@@ -507,6 +524,7 @@ impl BlockchainClient {
                     .parse_storage_incentives_log(
                         contract,
                         log,
+                        cache,
                         &mut block_cache,
                         retry_config,
                     )
@@ -558,6 +576,7 @@ impl BlockchainClient {
         &self,
         contract: &dyn StorageIncentivesContract,
         log: Log,
+        cache: &Cache,
         block_cache: &mut HashMap<u64, Block>,
         retry_config: &RetryConfig,
     ) -> Result<Option<StorageIncentivesEvent>> {
@@ -573,10 +592,14 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp from cache or fetch from RPC
-        let block = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT for block {}", block_number);
-            cached_block.clone()
+        // Get block timestamp - check in-memory cache first, then database, then RPC
+        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
+            let timestamp = cached_block.header.timestamp;
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
+            tracing::debug!("Block cache HIT (database) for block {}", block_number);
+            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
         } else {
             tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
 
@@ -603,14 +626,13 @@ impl BlockchainClient {
                 .await
                 .map_err(StampError::Rpc)?;
 
-            // Store in cache for future use
-            block_cache.insert(block_number, fetched_block.clone());
-            fetched_block
-        };
+            let timestamp = fetched_block.header.timestamp;
 
-        let timestamp = block.header.timestamp;
-        let block_timestamp =
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now);
+            // Store in in-memory cache for future use in this session
+            block_cache.insert(block_number, fetched_block);
+
+            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
+        };
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)
@@ -710,7 +732,7 @@ impl BlockchainClient {
                 } = &event.data
             {
                 batches.push(BatchInfo {
-                    batch_id: event.batch_id.clone(),
+                    batch_id: event.batch_id.clone().unwrap_or_default(),
                     owner: owner.clone(),
                     depth: *depth,
                     bucket_depth: *bucket_depth,

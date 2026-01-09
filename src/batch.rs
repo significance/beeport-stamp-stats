@@ -89,9 +89,14 @@ impl PeriodStatsBuilder {
             EventType::BatchCreated => self.batch_created_count += 1,
             EventType::BatchTopUp => self.batch_topup_count += 1,
             EventType::BatchDepthIncrease => self.batch_depth_increase_count += 1,
+            EventType::PotWithdrawn => {} // PotWithdrawn events don't affect batch stats
+            EventType::PriceUpdate => {} // PriceUpdate events don't affect batch stats
+            EventType::CopyBatchFailed => {} // CopyBatchFailed events don't affect batch stats
         }
 
-        self.batch_ids.insert(event.batch_id.clone());
+        if let Some(batch_id) = &event.batch_id {
+            self.batch_ids.insert(batch_id.clone());
+        }
     }
 
     fn build(self) -> PeriodStats {
@@ -141,7 +146,7 @@ mod tests {
         let events = vec![
             StampEvent {
                 event_type: EventType::BatchCreated,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 1000,
                 block_timestamp: Utc.with_ymd_and_hms(2025, 3, 15, 12, 0, 0).unwrap(),
                 transaction_hash: "0xabcd1".to_string(),
@@ -160,7 +165,7 @@ mod tests {
             },
             StampEvent {
                 event_type: EventType::BatchTopUp,
-                batch_id: "0x1234".to_string(),
+                batch_id: Some("0x1234".to_string()),
                 block_number: 1001,
                 block_timestamp: Utc.with_ymd_and_hms(2025, 3, 15, 13, 0, 0).unwrap(),
                 transaction_hash: "0xabcd2".to_string(),
