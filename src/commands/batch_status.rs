@@ -14,6 +14,12 @@ pub struct BatchStatus {
     #[tabled(rename = "Batch ID")]
     pub batch_id: String,
 
+    #[tabled(rename = "Owner")]
+    pub owner: String,
+
+    #[tabled(rename = "Payer")]
+    pub payer: String,
+
     #[tabled(rename = "Depth")]
     pub depth: u8,
 
@@ -68,6 +74,8 @@ impl BatchStatus {
 
         Ok(Self {
             batch_id: batch.batch_id.clone(),
+            owner: batch.owner.clone(),
+            payer: batch.payer.clone().unwrap_or_else(|| "-".to_string()),
             depth: batch.depth,
             size_chunks: format_number(size_chunks),
             normalised_balance: format_number(balance_value),
@@ -109,14 +117,32 @@ pub async fn execute(
     refresh: bool,
     only_missing: bool,
     hide_zero_balance: bool,
+    contract_filter: Option<String>,
     cache_validity_blocks: u64,
 ) -> Result<()> {
     // Get all batches from cache
-    let batches = cache.get_batches(0).await?;
+    let mut batches = cache.get_batches(0).await?;
 
     if batches.is_empty() {
         println!("No batches found in database. Run 'sync' or 'fetch' first.");
         return Ok(());
+    }
+
+    // Filter by contract source if requested
+    if let Some(filter) = contract_filter {
+        let contract_source = match filter.to_lowercase().as_str() {
+            "postage-stamp" | "postagestamp" => "PostageStamp",
+            "stamps-registry" | "stampsregistry" => "StampsRegistry",
+            _ => {
+                return Err(crate::error::StampError::Parse(format!(
+                    "Invalid contract filter '{}'. Use 'postage-stamp' or 'stamps-registry'",
+                    filter
+                )));
+            }
+        };
+        let before = batches.len();
+        batches.retain(|b| b.contract_source == contract_source);
+        println!("Filtered to {} batches from {} (was {})", batches.len(), contract_source, before);
     }
 
     // Determine price configuration
@@ -329,6 +355,8 @@ mod tests {
         let batch = BatchInfo {
             batch_id: "0x1234".to_string(),
             owner: "0x5678".to_string(),
+            payer: None,
+            contract_source: "PostageStamp".to_string(),
             depth: 20,
             bucket_depth: 16,
             immutable: false,

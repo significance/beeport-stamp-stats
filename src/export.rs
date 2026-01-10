@@ -84,16 +84,17 @@ fn export_batches_csv<P: AsRef<Path>>(batches: &[BatchInfo], path: P) -> Result<
     // Write header
     writeln!(
         file,
-        "batch_id,owner,depth,bucket_depth,immutable,normalised_balance,created_at"
+        "batch_id,owner,payer,depth,bucket_depth,immutable,normalised_balance,created_at"
     )?;
 
     // Write data
     for batch in batches {
         writeln!(
             file,
-            "{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{}",
             batch.batch_id,
             batch.owner,
+            batch.payer.as_deref().unwrap_or("-"),
             batch.depth,
             batch.bucket_depth,
             batch.immutable,
@@ -225,6 +226,8 @@ mod tests {
         let batches = vec![BatchInfo {
             batch_id: "0x1234".to_string(),
             owner: "0x5678".to_string(),
+            payer: None,
+            contract_source: "PostageStamp".to_string(),
             depth: 20,
             bucket_depth: 16,
             immutable: false,
@@ -246,6 +249,8 @@ mod tests {
         let batches = vec![BatchInfo {
             batch_id: "0x1234".to_string(),
             owner: "0x5678".to_string(),
+            payer: None,
+            contract_source: "PostageStamp".to_string(),
             depth: 20,
             bucket_depth: 16,
             immutable: false,

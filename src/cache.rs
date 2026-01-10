@@ -385,12 +385,14 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT OR REPLACE INTO batches
-                        (batch_id, owner, depth, bucket_depth, immutable, normalised_balance, created_at, block_number)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (batch_id, owner, payer, contract_source, depth, bucket_depth, immutable, normalised_balance, created_at, block_number)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         "#
                     )
                     .bind(&batch.batch_id)
                     .bind(&batch.owner)
+                    .bind(&batch.payer)
+                    .bind(&batch.contract_source)
                     .bind(batch.depth as i64)
                     .bind(batch.bucket_depth as i64)
                     .bind(immutable)
@@ -404,10 +406,12 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT INTO batches
-                        (batch_id, owner, depth, bucket_depth, immutable, normalised_balance, created_at, block_number)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        (batch_id, owner, payer, contract_source, depth, bucket_depth, immutable, normalised_balance, created_at, block_number)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         ON CONFLICT (batch_id) DO UPDATE SET
                             owner = EXCLUDED.owner,
+                            payer = EXCLUDED.payer,
+                            contract_source = EXCLUDED.contract_source,
                             depth = EXCLUDED.depth,
                             bucket_depth = EXCLUDED.bucket_depth,
                             immutable = EXCLUDED.immutable,
@@ -418,6 +422,8 @@ impl Cache {
                     )
                     .bind(&batch.batch_id)
                     .bind(&batch.owner)
+                    .bind(&batch.payer)
+                    .bind(&batch.contract_source)
                     .bind(batch.depth as i64)
                     .bind(batch.bucket_depth as i64)
                     .bind(immutable)
@@ -570,7 +576,7 @@ impl Cache {
             DatabasePool::Sqlite(pool) => {
                 let rows = sqlx::query(
                     r#"
-                    SELECT batch_id, owner, depth, bucket_depth, immutable,
+                    SELECT batch_id, owner, payer, contract_source, depth, bucket_depth, immutable,
                            normalised_balance, created_at, block_number
                     FROM batches
                     WHERE created_at >= ?
@@ -590,6 +596,8 @@ impl Cache {
                     batches.push(BatchInfo {
                         batch_id: row.get("batch_id"),
                         owner: row.get("owner"),
+                        payer: row.get("payer"),
+                        contract_source: row.get("contract_source"),
                         depth: row.get::<i64, _>("depth") as u8,
                         bucket_depth: row.get::<i64, _>("bucket_depth") as u8,
                         immutable: immutable != 0,
@@ -603,7 +611,7 @@ impl Cache {
             DatabasePool::Postgres(pool) => {
                 let rows = sqlx::query(
                     r#"
-                    SELECT batch_id, owner, depth, bucket_depth, immutable,
+                    SELECT batch_id, owner, payer, contract_source, depth, bucket_depth, immutable,
                            normalised_balance, created_at, block_number
                     FROM batches
                     WHERE created_at >= $1
@@ -623,6 +631,8 @@ impl Cache {
                     batches.push(BatchInfo {
                         batch_id: row.get("batch_id"),
                         owner: row.get("owner"),
+                        payer: row.get("payer"),
+                        contract_source: row.get("contract_source"),
                         depth: row.get::<i64, _>("depth") as u8,
                         bucket_depth: row.get::<i64, _>("bucket_depth") as u8,
                         immutable: immutable != 0,
@@ -1075,6 +1085,8 @@ mod tests {
         let batches = vec![BatchInfo {
             batch_id: "0x1234".to_string(),
             owner: "0x5678".to_string(),
+            payer: None,
+            contract_source: "PostageStamp".to_string(),
             depth: 20,
             bucket_depth: 16,
             immutable: false,

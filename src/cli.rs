@@ -201,6 +201,10 @@ pub enum Commands {
         #[arg(long, default_value = "false")]
         hide_zero_balance: bool,
 
+        /// Filter by contract source (postage-stamp or stamps-registry)
+        #[arg(long)]
+        contract: Option<String>,
+
         /// Cache validity in blocks (default: 518400 blocks = ~1 month at 5s/block)
         #[arg(long, default_value = "518400")]
         cache_validity_blocks: u64,
@@ -478,6 +482,7 @@ impl Cli {
                 only_missing,
                 max_retries: _,  // Ignored, use config
                 hide_zero_balance,
+                contract,
                 cache_validity_blocks,
             } => {
                 self.execute_batch_status(
@@ -492,6 +497,7 @@ impl Cli {
                     *refresh,
                     *only_missing,
                     *hide_zero_balance,
+                    contract.clone(),
                     *cache_validity_blocks,
                 )
                 .await
@@ -1025,6 +1031,7 @@ impl Cli {
         refresh: bool,
         only_missing: bool,
         hide_zero_balance: bool,
+        contract: Option<String>,
         cache_validity_blocks: u64,
     ) -> Result<()> {
         crate::commands::batch_status::execute(
@@ -1039,6 +1046,7 @@ impl Cli {
             refresh,
             only_missing,
             hide_zero_balance,
+            contract,
             cache_validity_blocks,
         )
         .await
