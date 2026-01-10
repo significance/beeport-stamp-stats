@@ -571,7 +571,7 @@ impl Cli {
         // Fetch and display postage stamp events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
-        let events = client
+        let mut events = client
             .fetch_batch_events(
                 from,
                 to,
@@ -604,6 +604,16 @@ impl Cli {
             .await?;
 
         tracing::info!("Found {} total postage stamp events", events.len());
+
+        // Populate from_address for all events
+        tracing::info!("Fetching transaction senders (from_address) for {} events...", events.len());
+        client
+            .populate_from_addresses(&mut events, &config.retry)
+            .await?;
+
+        // Update events in database with from_address
+        cache.store_events(&events).await?;
+        tracing::info!("Updated events with from_address");
 
         // Fetch and display storage incentives events with incremental storage
         let cache_clone = cache.clone();

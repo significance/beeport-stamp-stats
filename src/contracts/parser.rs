@@ -76,7 +76,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchCreated {
+            from_address: None,            data: EventData::BatchCreated {
                 total_amount: event.totalAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
                 owner: format!("{:?}", event.owner),
@@ -99,7 +99,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchTopUp {
+            from_address: None,            data: EventData::BatchTopUp {
                 topup_amount: event.topupAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
                 payer: None, // PostageStamp doesn't have payer field
@@ -118,7 +118,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchDepthIncrease {
+            from_address: None,            data: EventData::BatchDepthIncrease {
                 new_depth: event.newDepth,
                 normalised_balance: event.normalisedBalance.to_string(),
                 payer: None, // PostageStamp doesn't have payer field
@@ -137,7 +137,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::PotWithdrawn {
+            from_address: None,            data: EventData::PotWithdrawn {
                 recipient: format!("{:?}", event.recipient),
                 total_amount: event.totalAmount.to_string(),
             },
@@ -155,7 +155,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::PriceUpdate {
+            from_address: None,            data: EventData::PriceUpdate {
                 price: event.price.to_string(),
             },
         }));
@@ -172,7 +172,7 @@ pub fn parse_postage_stamp_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::CopyBatchFailed {
+            from_address: None,            data: EventData::CopyBatchFailed {
                 index: event.index.to_string(),
                 batch_id: format!("{:?}", event.batchId),
             },
@@ -207,7 +207,7 @@ pub fn parse_stamps_registry_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchCreated {
+            from_address: None,            data: EventData::BatchCreated {
                 total_amount: event.totalAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
                 owner: format!("{:?}", event.owner),
@@ -230,7 +230,7 @@ pub fn parse_stamps_registry_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchTopUp {
+            from_address: None,            data: EventData::BatchTopUp {
                 topup_amount: event.topupAmount.to_string(),
                 normalised_balance: event.normalisedBalance.to_string(),
                 payer: Some(format!("{:?}", event.payer)), // StampsRegistry has payer field
@@ -249,7 +249,7 @@ pub fn parse_stamps_registry_event(
             log_index,
             contract_source: contract_source.to_string(),
             contract_address: Some(contract_address.clone()),
-            data: EventData::BatchDepthIncrease {
+            from_address: None,            data: EventData::BatchDepthIncrease {
                 new_depth: event.newDepth,
                 normalised_balance: event.normalisedBalance.to_string(),
                 payer: Some(format!("{:?}", event.payer)), // StampsRegistry has payer field

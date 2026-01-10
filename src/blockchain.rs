@@ -749,6 +749,71 @@ impl BlockchainClient {
 
         Ok(batches)
     }
+
+    /// Fetch transaction details to get the from address
+    ///
+    /// Returns the sender address of the transaction.
+    pub async fn get_transaction_from_address(
+        &self,
+        transaction_hash: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<String> {
+        tracing::debug!("RPC: get_transaction_by_hash(hash={})", transaction_hash);
+
+        let provider = &self.provider;
+        let tx_hash_bytes = transaction_hash
+            .parse()
+            .map_err(|e| StampError::Parse(format!("Invalid transaction hash: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let tx = provider
+                    .get_transaction_by_hash(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get transaction: {e}")))?
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Transaction {transaction_hash} not found"),
+                        )
+                    })?;
+
+                Ok::<String, std::io::Error>(format!("{:?}", tx.from))
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+
+    /// Populate from_address for all events by fetching transaction details
+    ///
+    /// This modifies the events in place, setting the from_address field.
+    pub async fn populate_from_addresses(
+        &self,
+        events: &mut [StampEvent],
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        for event in events {
+            if event.from_address.is_none() {
+                match self
+                    .get_transaction_from_address(&event.transaction_hash, retry_config)
+                    .await
+                {
+                    Ok(from_addr) => {
+                        event.from_address = Some(from_addr);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to fetch from_address for tx {}: {}",
+                            event.transaction_hash,
+                            e
+                        );
+                        // Continue processing other events even if one fails
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // Note: Integration tests with actual RPC would go in tests/ directory

@@ -148,8 +148,8 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT OR REPLACE INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, from_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         "#,
                     )
                     .bind(&event_type)
@@ -160,6 +160,7 @@ impl Cache {
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
                     .bind(contract_address)
+                    .bind(event.from_address.as_deref())
                     .bind(&data)
                     .bind(pot_recipient)
                     .bind(pot_total_amount)
@@ -173,8 +174,8 @@ impl Cache {
                     sqlx::query(
                         r#"
                         INSERT INTO events
-                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                        (event_type, batch_id, block_number, block_timestamp, transaction_hash, log_index, contract_source, contract_address, from_address, data, pot_recipient, pot_total_amount, price, copy_index, copy_batch_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                         ON CONFLICT (transaction_hash, log_index) DO UPDATE SET
                             event_type = EXCLUDED.event_type,
                             batch_id = EXCLUDED.batch_id,
@@ -182,6 +183,7 @@ impl Cache {
                             block_timestamp = EXCLUDED.block_timestamp,
                             contract_source = EXCLUDED.contract_source,
                             contract_address = EXCLUDED.contract_address,
+                            from_address = EXCLUDED.from_address,
                             data = EXCLUDED.data,
                             pot_recipient = EXCLUDED.pot_recipient,
                             pot_total_amount = EXCLUDED.pot_total_amount,
@@ -198,6 +200,7 @@ impl Cache {
                     .bind(event.log_index as i64)
                     .bind(&event.contract_source)
                     .bind(contract_address)
+                    .bind(event.from_address.as_deref())
                     .bind(&data)
                     .bind(pot_recipient)
                     .bind(pot_total_amount)
@@ -472,7 +475,7 @@ impl Cache {
                 let rows = sqlx::query(
                     r#"
                     SELECT event_type, batch_id, block_number, block_timestamp,
-                           transaction_hash, log_index, contract_source, data
+                           transaction_hash, log_index, contract_source, from_address, data
                     FROM events
                     WHERE block_timestamp >= ?
                     ORDER BY block_number ASC, log_index ASC
@@ -508,6 +511,7 @@ impl Cache {
                         log_index: row.get::<i64, _>("log_index") as u64,
                         contract_source: row.get("contract_source"),
                         contract_address: None, // Will be populated from database after migration
+                        from_address: row.get("from_address"),
                         data,
                     });
                 }
@@ -517,7 +521,7 @@ impl Cache {
                 let rows = sqlx::query(
                     r#"
                     SELECT event_type, batch_id, block_number, block_timestamp,
-                           transaction_hash, log_index, contract_source, data
+                           transaction_hash, log_index, contract_source, from_address, data
                     FROM events
                     WHERE block_timestamp >= $1
                     ORDER BY block_number ASC, log_index ASC
@@ -553,6 +557,7 @@ impl Cache {
                         log_index: row.get::<i64, _>("log_index") as u64,
                         contract_source: row.get("contract_source"),
                         contract_address: None, // Will be populated from database after migration
+                        from_address: row.get("from_address"),
                         data,
                     });
                 }
