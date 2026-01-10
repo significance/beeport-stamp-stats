@@ -1286,6 +1286,56 @@ impl Cache {
             }
         }
     }
+
+    /// Get migration status from the database
+    pub async fn get_migration_status(&self) -> Result<Vec<MigrationInfo>> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let query = r#"
+                    SELECT CAST(version AS TEXT) as version, description, installed_on
+                    FROM _sqlx_migrations
+                    ORDER BY version
+                "#;
+                let rows = sqlx::query(query).fetch_all(pool).await?;
+                let mut migrations = Vec::new();
+                for row in rows {
+                    migrations.push(MigrationInfo {
+                        version: row.get("version"),
+                        description: row.get("description"),
+                        installed_on: row.get("installed_on"),
+                    });
+                }
+                Ok(migrations)
+            }
+            DatabasePool::Postgres(pool) => {
+                // Use custom query to format timestamp as string
+                let query_with_format = r#"
+                    SELECT version, description, to_char(installed_on, 'YYYY-MM-DD HH24:MI:SS') as installed_on
+                    FROM _sqlx_migrations
+                    ORDER BY version
+                "#;
+                let rows = sqlx::query(query_with_format).fetch_all(pool).await?;
+                let mut migrations = Vec::new();
+                for row in rows {
+                    let version: i64 = row.get("version");
+                    migrations.push(MigrationInfo {
+                        version: version.to_string(),
+                        description: row.get("description"),
+                        installed_on: row.get("installed_on"),
+                    });
+                }
+                Ok(migrations)
+            }
+        }
+    }
+}
+
+/// Migration information
+#[derive(Debug, Clone)]
+pub struct MigrationInfo {
+    pub version: String,
+    pub description: String,
+    pub installed_on: String,
 }
 
 #[cfg(test)]

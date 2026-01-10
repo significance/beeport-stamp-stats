@@ -265,6 +265,11 @@ pub enum Commands {
         #[arg(long, default_value = "false")]
         show_delegated_only: bool,
     },
+
+    /// Show database migration status
+    ///
+    /// Displays which migrations have been applied to the database.
+    Migrations,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -558,6 +563,7 @@ impl Cli {
                 )
                 .await
             }
+            Commands::Migrations => self.execute_migrations(cache).await,
         }
     }
 
@@ -1141,6 +1147,28 @@ impl Cli {
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_migrations(&self, cache: Cache) -> Result<()> {
+        let migrations = cache.get_migration_status().await?;
+        let total = migrations.len();
+
+        println!("\n## Database Migration Status\n");
+        println!("{:<20} {:<50} {:<30}", "Version", "Description", "Applied At");
+        println!("{}", "-".repeat(100));
+
+        for migration in migrations {
+            println!(
+                "{:<20} {:<50} {:<30}",
+                migration.version,
+                migration.description,
+                migration.installed_on
+            );
+        }
+
+        println!("\n**Total migrations applied:** {total}\n");
+
+        Ok(())
     }
 }
 
