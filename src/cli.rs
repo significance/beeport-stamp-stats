@@ -247,6 +247,24 @@ pub enum Commands {
         #[arg(long, default_value = "518400")]
         cache_validity_blocks: u64,
     },
+
+    /// Analyze addresses involved in stamp purchases
+    ///
+    /// Shows unique addresses (owners, payers, transaction senders) and their activity.
+    /// Identifies when owner/payer/from addresses differ.
+    AddressSummary {
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Minimum number of stamps to include address
+        #[arg(long, default_value = "1")]
+        min_stamps: u32,
+
+        /// Show only addresses where owner != from_address
+        #[arg(long, default_value = "false")]
+        show_delegated_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -524,6 +542,19 @@ impl Cli {
                     price_change.clone(),
                     *refresh,
                     *cache_validity_blocks,
+                )
+                .await
+            }
+            Commands::AddressSummary {
+                output,
+                min_stamps,
+                show_delegated_only,
+            } => {
+                self.execute_address_summary(
+                    cache,
+                    output.clone(),
+                    *min_stamps,
+                    *show_delegated_only,
                 )
                 .await
             }
@@ -1090,6 +1121,23 @@ impl Cli {
             price_change,
             refresh,
             cache_validity_blocks,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_address_summary(
+        &self,
+        cache: Cache,
+        output: OutputFormat,
+        min_stamps: u32,
+        show_delegated_only: bool,
+    ) -> Result<()> {
+        crate::commands::address_summary::execute(
+            cache,
+            output,
+            min_stamps,
+            show_delegated_only,
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))

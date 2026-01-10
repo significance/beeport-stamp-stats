@@ -1031,6 +1031,261 @@ impl Cache {
             }
         }
     }
+
+    /// Get address summary showing unique addresses and their activity
+    pub async fn get_address_summary(
+        &self,
+        min_stamps: u32,
+    ) -> Result<Vec<crate::commands::address_summary::AddressSummary>> {
+        use crate::commands::address_summary::AddressSummary;
+
+        let query = format!(
+            r#"
+            WITH address_roles AS (
+                SELECT
+                    address,
+                    SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0 as is_owner,
+                    SUM(CASE WHEN role = 'payer' THEN 1 ELSE 0 END) > 0 as is_payer,
+                    SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0 as is_sender,
+                    COUNT(*) as stamp_count,
+                    MIN(block_timestamp) as first_seen,
+                    MAX(block_timestamp) as last_seen
+                FROM (
+                    SELECT
+                        COALESCE(json_extract(data, '$.BatchCreated.owner'), json_extract(data, '$.BatchTopUp.owner')) as address,
+                        'owner' as role,
+                        block_timestamp
+                    FROM events
+                    WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+
+                    UNION ALL
+
+                    SELECT
+                        COALESCE(json_extract(data, '$.BatchCreated.payer'), json_extract(data, '$.BatchTopUp.payer')) as address,
+                        'payer' as role,
+                        block_timestamp
+                    FROM events
+                    WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                      AND COALESCE(json_extract(data, '$.BatchCreated.payer'), json_extract(data, '$.BatchTopUp.payer')) IS NOT NULL
+
+                    UNION ALL
+
+                    SELECT
+                        from_address as address,
+                        'sender' as role,
+                        block_timestamp
+                    FROM events
+                    WHERE from_address IS NOT NULL
+                ) all_addresses
+                WHERE address IS NOT NULL
+                GROUP BY address
+                HAVING stamp_count >= {min_stamps}
+            )
+            SELECT
+                address,
+                CASE
+                    WHEN is_owner AND is_payer AND is_sender THEN 'Owner+Payer+Sender'
+                    WHEN is_owner AND is_sender THEN 'Owner+Sender'
+                    WHEN is_payer AND is_sender THEN 'Payer+Sender'
+                    WHEN is_owner AND is_payer THEN 'Owner+Payer'
+                    WHEN is_owner THEN 'Owner'
+                    WHEN is_payer THEN 'Payer'
+                    WHEN is_sender THEN 'Sender'
+                    ELSE 'Unknown'
+                END as role,
+                stamp_count,
+                datetime(first_seen, 'unixepoch') as first_seen,
+                datetime(last_seen, 'unixepoch') as last_seen,
+                is_owner,
+                is_payer,
+                is_sender
+            FROM address_roles
+            ORDER BY stamp_count DESC, address
+            "#
+        );
+
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let rows = sqlx::query(&query).fetch_all(pool).await?;
+
+                let mut summaries = Vec::new();
+                for row in rows {
+                    summaries.push(AddressSummary {
+                        address: row.get("address"),
+                        role: row.get("role"),
+                        stamp_count: row.get("stamp_count"),
+                        first_seen: row.get("first_seen"),
+                        last_seen: row.get("last_seen"),
+                        is_owner: row.get::<i64, _>("is_owner") != 0,
+                        is_payer: row.get::<i64, _>("is_payer") != 0,
+                        is_sender: row.get::<i64, _>("is_sender") != 0,
+                    });
+                }
+
+                Ok(summaries)
+            }
+            DatabasePool::Postgres(pool) => {
+                let query = format!(
+                    r#"
+                    WITH address_roles AS (
+                        SELECT
+                            address,
+                            SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0 as is_owner,
+                            SUM(CASE WHEN role = 'payer' THEN 1 ELSE 0 END) > 0 as is_payer,
+                            SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0 as is_sender,
+                            COUNT(*) as stamp_count,
+                            MIN(block_timestamp) as first_seen,
+                            MAX(block_timestamp) as last_seen
+                        FROM (
+                            SELECT
+                                data::jsonb->>'owner' as address,
+                                'owner' as role,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+
+                            UNION ALL
+
+                            SELECT
+                                data::jsonb->>'payer' as address,
+                                'payer' as role,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                              AND data::jsonb->>'payer' IS NOT NULL
+
+                            UNION ALL
+
+                            SELECT
+                                from_address as address,
+                                'sender' as role,
+                                block_timestamp
+                            FROM events
+                            WHERE from_address IS NOT NULL
+                        ) all_addresses
+                        WHERE address IS NOT NULL
+                        GROUP BY address
+                        HAVING COUNT(*) >= {min_stamps}
+                    )
+                    SELECT
+                        address,
+                        CASE
+                            WHEN is_owner AND is_payer AND is_sender THEN 'Owner+Payer+Sender'
+                            WHEN is_owner AND is_sender THEN 'Owner+Sender'
+                            WHEN is_payer AND is_sender THEN 'Payer+Sender'
+                            WHEN is_owner AND is_payer THEN 'Owner+Payer'
+                            WHEN is_owner THEN 'Owner'
+                            WHEN is_payer THEN 'Payer'
+                            WHEN is_sender THEN 'Sender'
+                            ELSE 'Unknown'
+                        END as role,
+                        stamp_count,
+                        to_char(to_timestamp(first_seen), 'YYYY-MM-DD HH24:MI:SS') as first_seen,
+                        to_char(to_timestamp(last_seen), 'YYYY-MM-DD HH24:MI:SS') as last_seen,
+                        is_owner,
+                        is_payer,
+                        is_sender
+                    FROM address_roles
+                    ORDER BY stamp_count DESC, address
+                    "#
+                );
+
+                let rows = sqlx::query(&query).fetch_all(pool).await?;
+
+                let mut summaries = Vec::new();
+                for row in rows {
+                    summaries.push(AddressSummary {
+                        address: row.get("address"),
+                        role: row.get("role"),
+                        stamp_count: row.get("stamp_count"),
+                        first_seen: row.get("first_seen"),
+                        last_seen: row.get("last_seen"),
+                        is_owner: row.get("is_owner"),
+                        is_payer: row.get("is_payer"),
+                        is_sender: row.get("is_sender"),
+                    });
+                }
+
+                Ok(summaries)
+            }
+        }
+    }
+
+    /// Get delegation cases where owner != from_address
+    pub async fn get_delegation_cases(
+        &self,
+    ) -> Result<Vec<crate::commands::address_summary::DelegationCase>> {
+        use crate::commands::address_summary::DelegationCase;
+
+        let query = r#"
+            SELECT
+                transaction_hash,
+                COALESCE(json_extract(data, '$.BatchCreated.owner'), '') as owner,
+                COALESCE(json_extract(data, '$.BatchCreated.payer'), 'N/A') as payer,
+                COALESCE(from_address, 'N/A') as from_address,
+                block_number,
+                COALESCE(batch_id, 'N/A') as batch_id
+            FROM events
+            WHERE event_type = 'BatchCreated'
+              AND from_address IS NOT NULL
+              AND json_extract(data, '$.BatchCreated.owner') != from_address
+            ORDER BY block_number DESC
+            LIMIT 100
+        "#;
+
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let rows = sqlx::query(query).fetch_all(pool).await?;
+
+                let mut cases = Vec::new();
+                for row in rows {
+                    cases.push(DelegationCase {
+                        tx_hash: row.get("transaction_hash"),
+                        owner: row.get("owner"),
+                        payer: row.get("payer"),
+                        from_address: row.get("from_address"),
+                        block_number: row.get("block_number"),
+                        batch_id: row.get("batch_id"),
+                    });
+                }
+
+                Ok(cases)
+            }
+            DatabasePool::Postgres(pool) => {
+                let query = r#"
+                    SELECT
+                        transaction_hash,
+                        COALESCE(data::jsonb->>'owner', '') as owner,
+                        COALESCE(data::jsonb->>'payer', 'N/A') as payer,
+                        COALESCE(from_address, 'N/A') as from_address,
+                        block_number,
+                        COALESCE(batch_id, 'N/A') as batch_id
+                    FROM events
+                    WHERE event_type = 'BatchCreated'
+                      AND from_address IS NOT NULL
+                      AND data::jsonb->>'owner' != from_address
+                    ORDER BY block_number DESC
+                    LIMIT 100
+                "#;
+
+                let rows = sqlx::query(query).fetch_all(pool).await?;
+
+                let mut cases = Vec::new();
+                for row in rows {
+                    cases.push(DelegationCase {
+                        tx_hash: row.get("transaction_hash"),
+                        owner: row.get("owner"),
+                        payer: row.get("payer"),
+                        from_address: row.get("from_address"),
+                        block_number: row.get("block_number"),
+                        batch_id: row.get("batch_id"),
+                    });
+                }
+
+                Ok(cases)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
