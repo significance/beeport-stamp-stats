@@ -83,6 +83,9 @@ pub enum EventData {
 pub struct BatchInfo {
     pub batch_id: String,
     pub owner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payer: Option<String>, // Only present in StampsRegistry events
+    pub contract_source: String, // Which contract created this batch (PostageStamp or StampsRegistry)
     pub depth: u8,
     pub bucket_depth: u8,
     pub immutable: bool,

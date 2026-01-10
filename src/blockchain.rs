@@ -728,12 +728,15 @@ impl BlockchainClient {
                     bucket_depth,
                     immutable_flag,
                     normalised_balance,
+                    payer,
                     ..
                 } = &event.data
             {
                 batches.push(BatchInfo {
                     batch_id: event.batch_id.clone().unwrap_or_default(),
                     owner: owner.clone(),
+                    payer: payer.clone(),
+                    contract_source: event.contract_source.clone(),
                     depth: *depth,
                     bucket_depth: *bucket_depth,
                     immutable: *immutable_flag,
