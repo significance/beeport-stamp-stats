@@ -270,6 +270,12 @@ pub enum Commands {
     ///
     /// Displays which migrations have been applied to the database.
     Migrations,
+
+    /// Drop and recreate the database (DESTRUCTIVE)
+    ///
+    /// This will permanently delete all data in the database and recreate it.
+    /// Requires confirmation before proceeding.
+    Reset,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -397,6 +403,11 @@ impl Cli {
     }
 
     pub async fn execute(&self) -> Result<()> {
+        // Handle reset command early (before connecting to database)
+        if matches!(&self.command, Commands::Reset) {
+            return self.execute_reset().await;
+        }
+
         // Resolve configuration
         let config = self.resolve_config()?;
 
@@ -564,6 +575,7 @@ impl Cli {
                 .await
             }
             Commands::Migrations => self.execute_migrations(cache).await,
+            Commands::Reset => unreachable!("Reset command handled early"),
         }
     }
 
@@ -1169,6 +1181,78 @@ impl Cli {
         }
 
         println!("\n**Total migrations applied:** {total}\n");
+
+        Ok(())
+    }
+
+    async fn execute_reset(&self) -> Result<()> {
+        // Get database path from config
+        let config = self.resolve_config()?;
+        let db_path = &config.database.path;
+
+        // Determine if PostgreSQL or SQLite
+        let is_postgres = db_path.starts_with("postgres://") || db_path.starts_with("postgresql://");
+
+        // Show warning and get confirmation
+        println!("\n😱 WARNING: This will PERMANENTLY DELETE all data in the database!\n");
+        if is_postgres {
+            println!("Database: PostgreSQL ({db_path})");
+        } else {
+            println!("Database: SQLite ({db_path})");
+        }
+        println!("\nType 'yes' to confirm: ");
+
+        // Read user input
+        use std::io::{self, Write};
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if input.trim().to_lowercase() != "yes" {
+            println!("\n❌ Reset cancelled.");
+            return Ok(());
+        }
+
+        // Perform reset based on database type
+        if is_postgres {
+            // Extract database name from PostgreSQL URL
+            let db_name = if let Some(last_slash) = db_path.rfind('/') {
+                &db_path[last_slash + 1..]
+            } else {
+                return Err(anyhow::anyhow!("Invalid PostgreSQL URL: cannot extract database name"));
+            };
+
+            println!("\n♻️ Dropping PostgreSQL database '{db_name}'...");
+
+            // Drop and recreate database using psql
+            let drop_status = std::process::Command::new("psql")
+                .args(["-c", &format!("DROP DATABASE IF EXISTS {db_name};")])
+                .status()?;
+
+            if !drop_status.success() {
+                return Err(anyhow::anyhow!("Failed to drop database"));
+            }
+
+            let create_status = std::process::Command::new("psql")
+                .args(["-c", &format!("CREATE DATABASE {db_name};")])
+                .status()?;
+
+            if !create_status.success() {
+                return Err(anyhow::anyhow!("Failed to create database"));
+            }
+
+            println!("✅ PostgreSQL database '{db_name}' has been reset successfully!");
+        } else {
+            // SQLite - just delete the file
+            println!("\n♻️ Deleting SQLite database file...");
+
+            if std::path::Path::new(db_path).exists() {
+                std::fs::remove_file(db_path)?;
+            }
+
+            println!("✅ SQLite database '{db_path}' has been reset successfully!");
+            println!("   (Database will be recreated on next run)");
+        }
 
         Ok(())
     }
