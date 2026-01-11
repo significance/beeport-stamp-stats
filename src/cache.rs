@@ -1328,6 +1328,391 @@ impl Cache {
             }
         }
     }
+
+    // ========================================================================
+    // Address Tracking Methods (Phase 2+3)
+    // ========================================================================
+
+    /// Store transaction details in the cache
+    pub async fn store_transaction_details(
+        &self,
+        tx_hash: &str,
+        from_address: &str,
+        to_address: Option<&str>,
+        value: &str,
+        gas_price: Option<&str>,
+        gas_used: Option<u64>,
+        block_number: u64,
+        block_timestamp: i64,
+        input_data: Option<&str>,
+        is_contract_creation: bool,
+    ) -> Result<()> {
+        let fetched_at = Utc::now().timestamp();
+
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT OR REPLACE INTO transaction_details
+                    (transaction_hash, from_address, to_address, value, gas_price, gas_used,
+                     block_number, block_timestamp, input_data, is_contract_creation, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(tx_hash)
+                .bind(from_address)
+                .bind(to_address)
+                .bind(value)
+                .bind(gas_price)
+                .bind(gas_used.map(|g| g as i64))
+                .bind(block_number as i64)
+                .bind(block_timestamp)
+                .bind(input_data)
+                .bind(if is_contract_creation { 1 } else { 0 })
+                .bind(fetched_at)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO transaction_details
+                    (transaction_hash, from_address, to_address, value, gas_price, gas_used,
+                     block_number, block_timestamp, input_data, is_contract_creation, fetched_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT (transaction_hash) DO UPDATE SET
+                        from_address = EXCLUDED.from_address,
+                        to_address = EXCLUDED.to_address,
+                        value = EXCLUDED.value,
+                        gas_price = EXCLUDED.gas_price,
+                        gas_used = EXCLUDED.gas_used,
+                        block_number = EXCLUDED.block_number,
+                        block_timestamp = EXCLUDED.block_timestamp,
+                        input_data = EXCLUDED.input_data,
+                        is_contract_creation = EXCLUDED.is_contract_creation,
+                        fetched_at = EXCLUDED.fetched_at
+                    "#,
+                )
+                .bind(tx_hash)
+                .bind(from_address)
+                .bind(to_address)
+                .bind(value)
+                .bind(gas_price)
+                .bind(gas_used.map(|g| g as i64))
+                .bind(block_number as i64)
+                .bind(block_timestamp)
+                .bind(input_data)
+                .bind(is_contract_creation)
+                .bind(fetched_at)
+                .execute(pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get transaction details from cache (returns None if not cached)
+    pub async fn get_transaction_details(&self, tx_hash: &str) -> Result<Option<TransactionDetails>> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT transaction_hash, from_address, to_address, value, gas_price, gas_used,
+                           block_number, block_timestamp, input_data, is_contract_creation, fetched_at
+                    FROM transaction_details
+                    WHERE transaction_hash = ?
+                    "#,
+                )
+                .bind(tx_hash)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    let is_contract: i64 = row.get("is_contract_creation");
+                    let gas_used: Option<i64> = row.get("gas_used");
+
+                    Ok(Some(TransactionDetails {
+                        transaction_hash: row.get("transaction_hash"),
+                        from_address: row.get("from_address"),
+                        to_address: row.get("to_address"),
+                        value: row.get("value"),
+                        gas_price: row.get("gas_price"),
+                        gas_used: gas_used.map(|g| g as u64),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp: row.get("block_timestamp"),
+                        input_data: row.get("input_data"),
+                        is_contract_creation: is_contract != 0,
+                        fetched_at: row.get("fetched_at"),
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+            DatabasePool::Postgres(pool) => {
+                let row = sqlx::query(
+                    r#"
+                    SELECT transaction_hash, from_address, to_address, value, gas_price, gas_used,
+                           block_number, block_timestamp, input_data, is_contract_creation, fetched_at
+                    FROM transaction_details
+                    WHERE transaction_hash = $1
+                    "#,
+                )
+                .bind(tx_hash)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(row) = row {
+                    let gas_used: Option<i64> = row.get("gas_used");
+
+                    Ok(Some(TransactionDetails {
+                        transaction_hash: row.get("transaction_hash"),
+                        from_address: row.get("from_address"),
+                        to_address: row.get("to_address"),
+                        value: row.get("value"),
+                        gas_price: row.get("gas_price"),
+                        gas_used: gas_used.map(|g| g as u64),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp: row.get("block_timestamp"),
+                        input_data: row.get("input_data"),
+                        is_contract_creation: row.get("is_contract_creation"),
+                        fetched_at: row.get("fetched_at"),
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    /// Create or update an address record
+    /// Uses UPSERT logic to handle both new addresses and updates to existing ones
+    pub async fn upsert_address(
+        &self,
+        address: &str,
+        batch_id: Option<&str>,
+        amount_spent: Option<&str>,
+        block_number: u64,
+        block_timestamp: i64,
+        is_contract: bool,
+    ) -> Result<()> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                // First, try to get existing address to update stamp_ids array
+                let existing = sqlx::query(
+                    "SELECT stamp_ids, total_stamps_purchased, total_amount_spent, first_seen, first_block FROM addresses WHERE address = ?",
+                )
+                .bind(address)
+                .fetch_optional(pool)
+                .await?;
+
+                if let Some(existing_row) = existing {
+                    // Update existing address
+                    let mut stamp_ids: Vec<String> = {
+                        let ids_str: String = existing_row.get("stamp_ids");
+                        serde_json::from_str(&ids_str).unwrap_or_default()
+                    };
+
+                    let mut total_stamps: i64 = existing_row.get("total_stamps_purchased");
+                    let mut total_spent: String = existing_row.get("total_amount_spent");
+
+                    // Add new batch_id if provided and not already in the list
+                    if let Some(bid) = batch_id {
+                        if !stamp_ids.contains(&bid.to_string()) {
+                            stamp_ids.push(bid.to_string());
+                            total_stamps += 1;
+                        }
+                    }
+
+                    // Add to total spent
+                    if let Some(amount) = amount_spent {
+                        let current: u128 = total_spent.parse().unwrap_or(0);
+                        let add: u128 = amount.parse().unwrap_or(0);
+                        total_spent = (current + add).to_string();
+                    }
+
+                    let stamp_ids_json = serde_json::to_string(&stamp_ids)?;
+
+                    sqlx::query(
+                        r#"
+                        UPDATE addresses SET
+                            stamp_ids = ?,
+                            total_stamps_purchased = ?,
+                            total_amount_spent = ?,
+                            last_seen = ?,
+                            last_block = ?,
+                            transaction_count = transaction_count + 1,
+                            is_contract = ?
+                        WHERE address = ?
+                        "#,
+                    )
+                    .bind(&stamp_ids_json)
+                    .bind(total_stamps)
+                    .bind(&total_spent)
+                    .bind(block_timestamp)
+                    .bind(block_number as i64)
+                    .bind(if is_contract { 1 } else { 0 })
+                    .bind(address)
+                    .execute(pool)
+                    .await?;
+                } else {
+                    // Insert new address
+                    let stamp_ids = if let Some(bid) = batch_id {
+                        serde_json::to_string(&vec![bid])?
+                    } else {
+                        "[]".to_string()
+                    };
+
+                    let total_stamps = if batch_id.is_some() { 1 } else { 0 };
+                    let total_spent = amount_spent.unwrap_or("0");
+
+                    sqlx::query(
+                        r#"
+                        INSERT INTO addresses
+                        (address, stamp_ids, total_stamps_purchased, total_amount_spent,
+                         first_seen, last_seen, first_block, last_block, transaction_count, is_contract)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                        "#,
+                    )
+                    .bind(address)
+                    .bind(&stamp_ids)
+                    .bind(total_stamps)
+                    .bind(total_spent)
+                    .bind(block_timestamp)
+                    .bind(block_timestamp)
+                    .bind(block_number as i64)
+                    .bind(block_number as i64)
+                    .bind(if is_contract { 1 } else { 0 })
+                    .execute(pool)
+                    .await?;
+                }
+            }
+            DatabasePool::Postgres(pool) => {
+                // PostgreSQL version with proper UPSERT
+                let stamp_ids_array = if let Some(bid) = batch_id {
+                    vec![bid]
+                } else {
+                    vec![]
+                };
+
+                let total_stamps = if batch_id.is_some() { 1 } else { 0 };
+                let total_spent = amount_spent.unwrap_or("0");
+
+                sqlx::query(
+                    r#"
+                    INSERT INTO addresses
+                    (address, stamp_ids, total_stamps_purchased, total_amount_spent,
+                     first_seen, last_seen, first_block, last_block, transaction_count, is_contract)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)
+                    ON CONFLICT (address) DO UPDATE SET
+                        stamp_ids = CASE
+                            WHEN $2 = '{}' THEN addresses.stamp_ids
+                            WHEN addresses.stamp_ids @> $2 THEN addresses.stamp_ids
+                            ELSE addresses.stamp_ids || $2
+                        END,
+                        total_stamps_purchased = CASE
+                            WHEN $2 = '{}' THEN addresses.total_stamps_purchased
+                            WHEN addresses.stamp_ids @> $2 THEN addresses.total_stamps_purchased
+                            ELSE addresses.total_stamps_purchased + 1
+                        END,
+                        total_amount_spent = (CAST(addresses.total_amount_spent AS NUMERIC) + CAST($4 AS NUMERIC))::TEXT,
+                        last_seen = $6,
+                        last_block = $8,
+                        transaction_count = addresses.transaction_count + 1,
+                        is_contract = $9
+                    "#,
+                )
+                .bind(address)
+                .bind(&stamp_ids_array)
+                .bind(total_stamps)
+                .bind(total_spent)
+                .bind(block_timestamp)
+                .bind(block_timestamp)
+                .bind(block_number as i64)
+                .bind(block_number as i64)
+                .bind(is_contract)
+                .execute(pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store an address interaction (funding relationship)
+    pub async fn store_address_interaction(
+        &self,
+        from_address: &str,
+        to_address: &str,
+        transaction_hash: &str,
+        amount: &str,
+        block_number: u64,
+        block_timestamp: i64,
+        related_to_stamp: bool,
+        stamp_batch_id: Option<&str>,
+    ) -> Result<()> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT OR IGNORE INTO address_interactions
+                    (from_address, to_address, transaction_hash, amount, block_number,
+                     block_timestamp, related_to_stamp, stamp_batch_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(from_address)
+                .bind(to_address)
+                .bind(transaction_hash)
+                .bind(amount)
+                .bind(block_number as i64)
+                .bind(block_timestamp)
+                .bind(if related_to_stamp { 1 } else { 0 })
+                .bind(stamp_batch_id)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO address_interactions
+                    (from_address, to_address, transaction_hash, amount, block_number,
+                     block_timestamp, related_to_stamp, stamp_batch_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (transaction_hash, from_address, to_address) DO NOTHING
+                    "#,
+                )
+                .bind(from_address)
+                .bind(to_address)
+                .bind(transaction_hash)
+                .bind(amount)
+                .bind(block_number as i64)
+                .bind(block_timestamp)
+                .bind(related_to_stamp)
+                .bind(stamp_batch_id)
+                .execute(pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Transaction details stored in cache
+#[derive(Debug, Clone)]
+pub struct TransactionDetails {
+    pub transaction_hash: String,
+    pub from_address: String,
+    pub to_address: Option<String>,
+    pub value: String,
+    pub gas_price: Option<String>,
+    pub gas_used: Option<u64>,
+    pub block_number: u64,
+    pub block_timestamp: i64,
+    pub input_data: Option<String>,
+    pub is_contract_creation: bool,
+    pub fetched_at: i64,
 }
 
 /// Migration information

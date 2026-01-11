@@ -7,6 +7,7 @@ use crate::contracts::{
 use crate::error::{Result, StampError};
 use crate::events::{BatchInfo, EventData, EventType, StampEvent, StorageIncentivesEvent};
 use crate::retry::RetryConfig;
+use alloy::consensus::Transaction as _;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::types::{Block, BlockTransactionsKind, Filter, Log};
@@ -814,6 +815,103 @@ impl BlockchainClient {
         }
         Ok(())
     }
+
+    /// Get full transaction details including from, to, value, gas info
+    ///
+    /// This is used for comprehensive address tracking (Phase 3)
+    pub async fn get_transaction_details(
+        &self,
+        transaction_hash: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<TransactionDetailsRpc> {
+        tracing::debug!("RPC: get_transaction_by_hash(hash={})", transaction_hash);
+
+        let provider = &self.provider;
+        let tx_hash_bytes = transaction_hash
+            .parse()
+            .map_err(|e| StampError::Parse(format!("Invalid transaction hash: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let tx = provider
+                    .get_transaction_by_hash(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get transaction: {e}")))?
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Transaction {transaction_hash} not found"),
+                        )
+                    })?;
+
+                let receipt = provider
+                    .get_transaction_receipt(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get receipt: {e}")))?;
+
+                let gas_used = receipt.as_ref().map(|r| r.gas_used);
+                let gas_price = receipt.as_ref().map(|r| r.effective_gas_price.to_string());
+
+                // Extract transaction details from the inner transaction
+                // Use a simpler approach that works with the actual Transaction type
+                let to_address = tx.to().map(|addr| format!("{addr:#x}"));
+                let value = tx.value().to_string();
+                let input_data = format!("{:#x}", tx.input());
+                let is_contract_creation = tx.to().is_none();
+
+                Ok::<TransactionDetailsRpc, std::io::Error>(TransactionDetailsRpc {
+                    from_address: format!("{:#x}", tx.from),
+                    to_address,
+                    value,
+                    gas_price,
+                    gas_used,
+                    input_data,
+                    is_contract_creation,
+                })
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+
+    /// Check if an address is a contract using eth_getCode
+    ///
+    /// Returns true if the address has code (is a contract), false otherwise
+    pub async fn is_contract(
+        &self,
+        address: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<bool> {
+        tracing::debug!("RPC: eth_getCode(address={})", address);
+
+        let provider = &self.provider;
+        let addr = Address::from_str(address)
+            .map_err(|e| StampError::Parse(format!("Invalid address: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let code = provider
+                    .get_code_at(addr)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get code: {e}")))?;
+
+                // If code is non-empty (more than just 0x), it's a contract
+                Ok::<bool, std::io::Error>(code.len() > 0)
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+}
+
+/// Transaction details from RPC
+#[derive(Debug, Clone)]
+pub struct TransactionDetailsRpc {
+    pub from_address: String,
+    pub to_address: Option<String>,
+    pub value: String,
+    pub gas_price: Option<String>,
+    pub gas_used: Option<u128>,
+    pub input_data: String,
+    pub is_contract_creation: bool,
 }
 
 // Note: Integration tests with actual RPC would go in tests/ directory
