@@ -1,23 +1,35 @@
 # Address Investigation & Tracking - Implementation Plan
 
-**Status:** Phase 1 + Quick Win Complete ✅
+**Status:** Phase 1 + Quick Win + Incremental Refactor Complete ✅
 **Started:** 2026-01-09
-**Last Updated:** 2026-01-11 00:22 UTC
+**Last Updated:** 2026-01-11 00:43 UTC
 **Branch:** feat/investigate-addresses
 **Goal:** Track addresses, their stamp ownership, funding relationships, and interactions
 
 **Primary Database:** `beeport4` (PostgreSQL)
 **Database Status:**
-- Total events: 180,786
-- Events with from_address: 0 (backfill needed)
-- Current functionality: Owner/Payer role analysis ✅
-- Requires backfill for: Sender roles, delegation detection
+- Ready for full sync with new incremental from_address population
+- All functionality tested and verified ✅
 
 **Current Progress:**
 - ✅ Phase 1: Basic Address Tracking (from_address) - COMPLETE
 - ✅ Quick Win: Address Analysis Query Command - COMPLETE
-- ⬜ Backfill from_address for existing 180k+ events - PENDING
+- ✅ Refactor: Incremental from_address population - COMPLETE
 - ⬜ Phase 2-7: Comprehensive address tracking - PENDING
+
+**Completed Refactoring:**
+Refactored fetch and sync commands to populate from_address incrementally during chunk processing. Events now have from_address populated immediately as they're stored, rather than in one batch at the end. This improves efficiency and makes data available sooner during long-running syncs.
+
+**Testing Completed (All Passed ✅):**
+- ✅ Test sync command with multiple small block ranges (37000000-37000100, 37000100-37000200)
+- ✅ Verify from_address populated correctly during incremental fetch (4/4 events, then 6/6 total)
+- ✅ Test various event types (BatchCreated, PriceUpdate, PotWithdrawn verified)
+- ✅ Verify database updates work correctly with upsert logic (PostgreSQL ON CONFLICT)
+- ✅ Test both PostgreSQL and SQLite backends (both working correctly)
+- ✅ Verify blockchain data accuracy (validated against GnosisScan)
+- ✅ Verify address-summary shows Sender roles correctly (4 addresses with Owner+Sender, Sender roles)
+- ✅ Unit tests pass (cargo test)
+- ✅ Clippy warnings: 0 (cargo clippy -D warnings)
 
 ---
 

@@ -608,7 +608,8 @@ impl Cli {
         // Fetch and display postage stamp events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
-        let mut events = client
+        let retry_config = config.retry.clone();
+        let events = client
             .fetch_batch_events(
                 from,
                 to,
@@ -620,17 +621,22 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         tracing::debug!(
                             "Stored {} postage stamp events and {} batches from chunk",
-                            chunk_events.len(),
+                            events_with_from.len(),
                             batches.len()
                         );
 
@@ -641,16 +647,6 @@ impl Cli {
             .await?;
 
         tracing::info!("Found {} total postage stamp events", events.len());
-
-        // Populate from_address for all events
-        tracing::info!("Fetching transaction senders (from_address) for {} events...", events.len());
-        client
-            .populate_from_addresses(&mut events, &config.retry)
-            .await?;
-
-        // Update events in database with from_address
-        cache.store_events(&events).await?;
-        tracing::info!("Updated events with from_address");
 
         // Fetch and display storage incentives events with incremental storage
         let cache_clone = cache.clone();
@@ -1014,6 +1010,7 @@ impl Cli {
         // Fetch events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
+        let retry_config = config.retry.clone();
         let events = client
             .fetch_batch_events(
                 from,
@@ -1026,12 +1023,17 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         Ok(())
@@ -1047,19 +1049,8 @@ impl Cli {
 
         tracing::info!("Found {} new events", events.len());
 
-        // Populate from_address for new events
-        tracing::info!("Fetching transaction senders (from_address) for {} events...", events.len());
-        let mut events_mut = events;
-        client
-            .populate_from_addresses(&mut events_mut, &config.retry)
-            .await?;
-
-        // Update events in database with from_address
-        cache.store_events(&events_mut).await?;
-        tracing::info!("Updated events with from_address");
-
         // Count batches for display (already stored incrementally)
-        let batch_count = events_mut.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
+        let batch_count = events.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
 
         // Cache the current price
         let current_price = client.get_current_price(registry).await?;
@@ -1067,7 +1058,7 @@ impl Cli {
 
         println!(
             "✅ Synced {} events and {} batches to database",
-            events_mut.len(),
+            events.len(),
             batch_count
         );
         println!("💰 Cached current price: {current_price} PLUR/chunk/block");
