@@ -1,21 +1,27 @@
 # Address Investigation & Tracking - Implementation Plan
 
-**Status:** Phase 1 + Quick Win + Incremental Refactor Complete ✅
+**Status:** Phase 1 + 2 + 3 Complete ✅ (Ready for Phase 4-7)
 **Started:** 2026-01-09
-**Last Updated:** 2026-01-11 00:43 UTC
-**Branch:** feat/investigate-addresses
+**Last Updated:** 2026-01-11 13:35 UTC
+**Branch:** feat/address-tracking-phase2
 **Goal:** Track addresses, their stamp ownership, funding relationships, and interactions
 
 **Primary Database:** `beeport4` (PostgreSQL)
 **Database Status:**
-- Ready for full sync with new incremental from_address population
-- All functionality tested and verified ✅
+- ✅ Phase 2 schema migrations deployed (11 total migrations)
+- ✅ Phase 3 integration tested and verified with real blockchain data
+- ✅ All functionality working correctly
 
 **Current Progress:**
 - ✅ Phase 1: Basic Address Tracking (from_address) - COMPLETE
 - ✅ Quick Win: Address Analysis Query Command - COMPLETE
 - ✅ Refactor: Incremental from_address population - COMPLETE
-- ⬜ Phase 2-7: Comprehensive address tracking - PENDING
+- ✅ Phase 2: Database Schema & Migrations - COMPLETE
+- ✅ Phase 3: Core Data Collection - COMPLETE
+- ⬜ Phase 4: Address Relationship Tracking - PENDING
+- ⬜ Phase 5: Data Population & Backfill - PENDING
+- ⬜ Phase 6: Query & Reporting Commands - PENDING
+- ⬜ Phase 7: Testing & Validation - PENDING
 
 **Completed Refactoring:**
 Refactored fetch and sync commands to populate from_address incrementally during chunk processing. Events now have from_address populated immediately as they're stored, rather than in one batch at the end. This improves efficiency and makes data available sooner during long-running syncs.
@@ -314,31 +320,75 @@ beeport-stamp-stats address-summary --output csv
 
 ---
 
-### Phase 2: Database Schema & Migrations ⬜
+### ✅ Phase 2: Database Schema & Migrations - COMPLETE
 **Goal:** Create comprehensive address tracking tables
 
-- [ ] Create PostgreSQL migration for addresses table
-- [ ] Create PostgreSQL migration for address_interactions table
-- [ ] Create PostgreSQL migration for transaction_details cache
-- [ ] Create SQLite migrations (same schema)
-- [ ] Test migrations on test database
+**Completed:** 2026-01-11
+
+- [x] Create PostgreSQL migration for addresses table (20260111000009)
+- [x] Create PostgreSQL migration for address_interactions table (20260111000010)
+- [x] Create PostgreSQL migration for transaction_details cache (20260111000011)
+- [x] Create SQLite migrations (same schema - all 3 tables)
+- [x] Test migrations on test database (PostgreSQL + SQLite)
+
+**Database Tables Created:**
+1. **addresses** - Tracks addresses, stamp activity, funding relationships
+   - 16 columns including stamp_ids (array), top_funders (JSONB), is_contract
+   - 6 indexes for efficient querying
+2. **address_interactions** - Stores funding transactions between addresses
+   - 9 columns including from/to addresses, amount, related_to_stamp
+   - 5 indexes for querying funding relationships
+3. **transaction_details** - Caches full transaction information
+   - 11 columns including from, to, value, gas info, input_data
+   - 4 indexes for efficient cache lookups
+
+**Testing Results:**
+- ✅ PostgreSQL migrations applied successfully
+- ✅ SQLite migrations applied successfully
+- ✅ All schemas verified correct
+- ✅ Indexes created properly
 
 ---
 
-### Phase 3: Core Data Collection ⬜
+### ✅ Phase 3: Core Data Collection - COMPLETE
 **Goal:** Collect transaction details and build address records
 
-- [ ] Enhance transaction details fetching
-  - [ ] Implement `eth_getCode` for contract detection
-  - [ ] Add transaction details caching
-  - [ ] Handle batch fetching efficiently
+**Completed:** 2026-01-11
 
-- [ ] Extend event processing to populate addresses table
-  - [ ] Create/update address record for `from_address`
-  - [ ] Create/update address record for `owner`
-  - [ ] Create/update address record for `payer` (if present)
-  - [ ] Add batch_id to address's stamp_ids array
-  - [ ] Update statistics (total_amount_spent, transaction_count)
+- [x] Enhance transaction details fetching
+  - [x] Implement `eth_getCode` for contract detection (blockchain.rs)
+  - [x] Add transaction details caching (get/store in cache.rs)
+  - [x] Handle all Ethereum transaction types (Legacy, EIP-2930, EIP-1559, etc.)
+
+- [x] Extend event processing to populate addresses table
+  - [x] Create/update address record for `from_address`
+  - [x] Create/update address record for `owner`
+  - [x] Create/update address record for `payer` (if present)
+  - [x] Add batch_id to address's stamp_ids array
+  - [x] Update statistics (total_amount_spent, transaction_count)
+
+- [x] Integration into fetch/sync commands
+  - [x] process_address_tracking() method (main integration point)
+  - [x] Cache-first strategy (check cache before RPC calls)
+  - [x] Contract detection for all addresses
+  - [x] Address interaction tracking (sender → owner)
+  - [x] Non-blocking (continues even if tracking fails)
+
+**Testing Results (Block 31306385):**
+- ✅ 40 events processed successfully
+- ✅ 15 unique addresses tracked
+- ✅ 1 transaction cached (efficient caching working)
+- ✅ 14 funding relationships recorded
+- ✅ All data verified correct:
+  - Top buyer: 0x4466...2ff5 (15 stamps)
+  - Second: 0x1354...4806 (13 stamps)
+  - Transaction sender: 0x6479...babfa (signs all txs)
+  - All addresses correctly marked as EOAs (not contracts)
+
+**Code Locations:**
+- `src/blockchain.rs`: get_transaction_details(), is_contract(), process_address_tracking()
+- `src/cache.rs`: store_transaction_details(), get_transaction_details(), upsert_address(), store_address_interaction()
+- `src/cli.rs`: Integration in fetch and sync command chunk callbacks
 
 ---
 
