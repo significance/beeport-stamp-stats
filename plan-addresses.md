@@ -2,13 +2,21 @@
 
 **Status:** Phase 1 + Quick Win Complete ✅
 **Started:** 2026-01-09
-**Last Updated:** 2026-01-10 15:50 UTC
+**Last Updated:** 2026-01-11 00:22 UTC
 **Branch:** feat/investigate-addresses
 **Goal:** Track addresses, their stamp ownership, funding relationships, and interactions
+
+**Primary Database:** `beeport4` (PostgreSQL)
+**Database Status:**
+- Total events: 180,786
+- Events with from_address: 0 (backfill needed)
+- Current functionality: Owner/Payer role analysis ✅
+- Requires backfill for: Sender roles, delegation detection
 
 **Current Progress:**
 - ✅ Phase 1: Basic Address Tracking (from_address) - COMPLETE
 - ✅ Quick Win: Address Analysis Query Command - COMPLETE
+- ⬜ Backfill from_address for existing 180k+ events - PENDING
 - ⬜ Phase 2-7: Comprehensive address tracking - PENDING
 
 ---
@@ -264,10 +272,18 @@ beeport-stamp-stats address-summary --output csv
 - Stamp purchase patterns: Count of stamps per address
 
 **Results from Testing:**
+
+*Test Database (beeport_testing_2 - small dataset):*
 - 117 unique addresses found (min 10 stamps filter)
 - 40 delegation cases identified
 - 1 multi-role address (Owner+Payer)
 - Role breakdown: Owner (113), Payer (3), Sender (1), Owner+Payer (1)
+
+*Production Database (beeport4 - 180k+ events):*
+- 116 unique addresses with 10+ stamps
+- Owner/Payer role analysis working correctly
+- 1 multi-role address (Owner+Payer)
+- Sender roles and delegation detection pending backfill
 
 **Technical Implementation:**
 - Uses CTE (Common Table Expression) for efficient aggregation

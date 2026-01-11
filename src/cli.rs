@@ -1047,8 +1047,19 @@ impl Cli {
 
         tracing::info!("Found {} new events", events.len());
 
+        // Populate from_address for new events
+        tracing::info!("Fetching transaction senders (from_address) for {} events...", events.len());
+        let mut events_mut = events;
+        client
+            .populate_from_addresses(&mut events_mut, &config.retry)
+            .await?;
+
+        // Update events in database with from_address
+        cache.store_events(&events_mut).await?;
+        tracing::info!("Updated events with from_address");
+
         // Count batches for display (already stored incrementally)
-        let batch_count = events.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
+        let batch_count = events_mut.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
 
         // Cache the current price
         let current_price = client.get_current_price(registry).await?;
@@ -1056,7 +1067,7 @@ impl Cli {
 
         println!(
             "✅ Synced {} events and {} batches to database",
-            events.len(),
+            events_mut.len(),
             batch_count
         );
         println!("💰 Cached current price: {current_price} PLUR/chunk/block");
