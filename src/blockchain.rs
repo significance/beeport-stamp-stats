@@ -7,6 +7,7 @@ use crate::contracts::{
 use crate::error::{Result, StampError};
 use crate::events::{BatchInfo, EventData, EventType, StampEvent, StorageIncentivesEvent};
 use crate::retry::RetryConfig;
+use alloy::consensus::Transaction as _;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::types::{Block, BlockTransactionsKind, Filter, Log};
@@ -749,6 +750,305 @@ impl BlockchainClient {
 
         Ok(batches)
     }
+
+    /// Fetch transaction details to get the from address
+    ///
+    /// Returns the sender address of the transaction.
+    pub async fn get_transaction_from_address(
+        &self,
+        transaction_hash: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<String> {
+        tracing::debug!("RPC: get_transaction_by_hash(hash={})", transaction_hash);
+
+        let provider = &self.provider;
+        let tx_hash_bytes = transaction_hash
+            .parse()
+            .map_err(|e| StampError::Parse(format!("Invalid transaction hash: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let tx = provider
+                    .get_transaction_by_hash(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get transaction: {e}")))?
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Transaction {transaction_hash} not found"),
+                        )
+                    })?;
+
+                Ok::<String, std::io::Error>(format!("{:?}", tx.from))
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+
+    /// Populate from_address for all events by fetching transaction details
+    ///
+    /// This modifies the events in place, setting the from_address field.
+    pub async fn populate_from_addresses(
+        &self,
+        events: &mut [StampEvent],
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        for event in events {
+            if event.from_address.is_none() {
+                match self
+                    .get_transaction_from_address(&event.transaction_hash, retry_config)
+                    .await
+                {
+                    Ok(from_addr) => {
+                        event.from_address = Some(from_addr);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to fetch from_address for tx {}: {}",
+                            event.transaction_hash,
+                            e
+                        );
+                        // Continue processing other events even if one fails
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get full transaction details including from, to, value, gas info
+    ///
+    /// This is used for comprehensive address tracking (Phase 3)
+    pub async fn get_transaction_details(
+        &self,
+        transaction_hash: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<TransactionDetailsRpc> {
+        tracing::debug!("RPC: get_transaction_by_hash(hash={})", transaction_hash);
+
+        let provider = &self.provider;
+        let tx_hash_bytes = transaction_hash
+            .parse()
+            .map_err(|e| StampError::Parse(format!("Invalid transaction hash: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let tx = provider
+                    .get_transaction_by_hash(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get transaction: {e}")))?
+                    .ok_or_else(|| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!("Transaction {transaction_hash} not found"),
+                        )
+                    })?;
+
+                let receipt = provider
+                    .get_transaction_receipt(tx_hash_bytes)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get receipt: {e}")))?;
+
+                let gas_used = receipt.as_ref().map(|r| r.gas_used);
+                let gas_price = receipt.as_ref().map(|r| r.effective_gas_price.to_string());
+
+                // Extract transaction details from the inner transaction
+                // Use a simpler approach that works with the actual Transaction type
+                let to_address = tx.to().map(|addr| format!("{addr:#x}"));
+                let value = tx.value().to_string();
+                let input_data = format!("{:#x}", tx.input());
+                let is_contract_creation = tx.to().is_none();
+
+                Ok::<TransactionDetailsRpc, std::io::Error>(TransactionDetailsRpc {
+                    from_address: format!("{:#x}", tx.from),
+                    to_address,
+                    value,
+                    gas_price,
+                    gas_used,
+                    input_data,
+                    is_contract_creation,
+                })
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+
+    /// Check if an address is a contract using eth_getCode
+    ///
+    /// Returns true if the address has code (is a contract), false otherwise
+    pub async fn is_contract(
+        &self,
+        address: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<bool> {
+        tracing::debug!("RPC: eth_getCode(address={})", address);
+
+        let provider = &self.provider;
+        let addr = Address::from_str(address)
+            .map_err(|e| StampError::Parse(format!("Invalid address: {e}")))?;
+
+        retry_config
+            .execute(|| async {
+                let code = provider
+                    .get_code_at(addr)
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("Failed to get code: {e}")))?;
+
+                // If code is non-empty (more than just 0x), it's a contract
+                Ok::<bool, std::io::Error>(code.len() > 0)
+            })
+            .await
+            .map_err(StampError::Rpc)
+    }
+
+    /// Process address tracking for a batch of events
+    ///
+    /// This is the main integration point for Phase 3 address tracking.
+    /// For each event, it:
+    /// 1. Fetches/caches transaction details
+    /// 2. Detects if addresses are contracts
+    /// 3. Updates address records for owner/payer/sender
+    /// 4. Stores address interactions
+    pub async fn process_address_tracking(
+        &self,
+        events: &[StampEvent],
+        cache: &Cache,
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        for event in events {
+            let tx_hash = &event.transaction_hash;
+            let block_number = event.block_number;
+            let block_timestamp = event.block_timestamp.timestamp();
+
+            // Check if we already have transaction details cached
+            let tx_details = match cache.get_transaction_details(tx_hash).await? {
+                Some(cached) => {
+                    tracing::debug!("Using cached transaction details for {}", tx_hash);
+                    cached
+                }
+                None => {
+                    // Fetch full transaction details from RPC
+                    tracing::debug!("Fetching transaction details for {}", tx_hash);
+                    let rpc_details = self.get_transaction_details(tx_hash, retry_config).await?;
+
+                    // Store in cache for future use
+                    cache.store_transaction_details(
+                        tx_hash,
+                        &rpc_details.from_address,
+                        rpc_details.to_address.as_deref(),
+                        &rpc_details.value,
+                        rpc_details.gas_price.as_deref(),
+                        rpc_details.gas_used.map(|g| g as u64),
+                        block_number,
+                        block_timestamp,
+                        Some(&rpc_details.input_data),
+                        rpc_details.is_contract_creation,
+                    ).await?;
+
+                    // Convert to cache format
+                    crate::cache::TransactionDetails {
+                        transaction_hash: tx_hash.to_string(),
+                        from_address: rpc_details.from_address,
+                        to_address: rpc_details.to_address,
+                        value: rpc_details.value,
+                        gas_price: rpc_details.gas_price,
+                        gas_used: rpc_details.gas_used.map(|g| g as u64),
+                        block_number,
+                        block_timestamp,
+                        input_data: Some(rpc_details.input_data),
+                        is_contract_creation: rpc_details.is_contract_creation,
+                        fetched_at: chrono::Utc::now().timestamp(),
+                    }
+                }
+            };
+
+            // Extract addresses from event data
+            let (owner, payer, amount_spent) = match &event.data {
+                EventData::BatchCreated {
+                    owner,
+                    payer,
+                    total_amount,
+                    ..
+                } => (Some(owner.as_str()), payer.as_deref(), Some(total_amount.as_str())),
+                EventData::BatchTopUp { payer, topup_amount, .. } => {
+                    (None, payer.as_deref(), Some(topup_amount.as_str()))
+                }
+                _ => (None, None, None),
+            };
+
+            let batch_id = event.batch_id.as_deref();
+            let sender = event.from_address.as_deref().unwrap_or(&tx_details.from_address);
+
+            // Process owner address (if present)
+            if let Some(owner_addr) = owner {
+                let is_contract = self.is_contract(owner_addr, retry_config).await.unwrap_or(false);
+                cache.upsert_address(
+                    owner_addr,
+                    batch_id,
+                    amount_spent,
+                    block_number,
+                    block_timestamp,
+                    is_contract,
+                ).await?;
+            }
+
+            // Process payer address (if different from owner)
+            if let Some(payer_addr) = payer {
+                if Some(payer_addr) != owner {
+                    let is_contract = self.is_contract(payer_addr, retry_config).await.unwrap_or(false);
+                    cache.upsert_address(
+                        payer_addr,
+                        batch_id,
+                        amount_spent,
+                        block_number,
+                        block_timestamp,
+                        is_contract,
+                    ).await?;
+                }
+            }
+
+            // Process sender address (transaction signer)
+            if let Some(owner_addr) = owner {
+                if sender != owner_addr {
+                    let is_contract = self.is_contract(sender, retry_config).await.unwrap_or(false);
+                    cache.upsert_address(
+                        sender,
+                        None, // Sender doesn't own the batch
+                        None, // Sender doesn't necessarily spend
+                        block_number,
+                        block_timestamp,
+                        is_contract,
+                    ).await?;
+
+                    // Record interaction: sender → owner (stamp purchase related)
+                    cache.store_address_interaction(
+                        sender,
+                        owner_addr,
+                        tx_hash,
+                        &tx_details.value,
+                        block_number,
+                        block_timestamp,
+                        true, // related to stamp
+                        batch_id,
+                    ).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Transaction details from RPC
+#[derive(Debug, Clone)]
+pub struct TransactionDetailsRpc {
+    pub from_address: String,
+    pub to_address: Option<String>,
+    pub value: String,
+    pub gas_price: Option<String>,
+    pub gas_used: Option<u128>,
+    pub input_data: String,
+    pub is_contract_creation: bool,
 }
 
 // Note: Integration tests with actual RPC would go in tests/ directory
