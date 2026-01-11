@@ -247,6 +247,35 @@ pub enum Commands {
         #[arg(long, default_value = "518400")]
         cache_validity_blocks: u64,
     },
+
+    /// Analyze addresses involved in stamp purchases
+    ///
+    /// Shows unique addresses (owners, payers, transaction senders) and their activity.
+    /// Identifies when owner/payer/from addresses differ.
+    AddressSummary {
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Minimum number of stamps to include address
+        #[arg(long, default_value = "1")]
+        min_stamps: u32,
+
+        /// Show only addresses where owner != from_address
+        #[arg(long, default_value = "false")]
+        show_delegated_only: bool,
+    },
+
+    /// Show database migration status
+    ///
+    /// Displays which migrations have been applied to the database.
+    Migrations,
+
+    /// Drop and recreate the database (DESTRUCTIVE)
+    ///
+    /// This will permanently delete all data in the database and recreate it.
+    /// Requires confirmation before proceeding.
+    Reset,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -374,6 +403,11 @@ impl Cli {
     }
 
     pub async fn execute(&self) -> Result<()> {
+        // Handle reset command early (before connecting to database)
+        if matches!(&self.command, Commands::Reset) {
+            return self.execute_reset().await;
+        }
+
         // Resolve configuration
         let config = self.resolve_config()?;
 
@@ -527,6 +561,21 @@ impl Cli {
                 )
                 .await
             }
+            Commands::AddressSummary {
+                output,
+                min_stamps,
+                show_delegated_only,
+            } => {
+                self.execute_address_summary(
+                    cache,
+                    output.clone(),
+                    *min_stamps,
+                    *show_delegated_only,
+                )
+                .await
+            }
+            Commands::Migrations => self.execute_migrations(cache).await,
+            Commands::Reset => unreachable!("Reset command handled early"),
         }
     }
 
@@ -571,6 +620,7 @@ impl Cli {
         // Fetch and display postage stamp events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
+        let retry_config = config.retry.clone();
         let events = client
             .fetch_batch_events(
                 from,
@@ -583,17 +633,22 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         tracing::debug!(
                             "Stored {} postage stamp events and {} batches from chunk",
-                            chunk_events.len(),
+                            events_with_from.len(),
                             batches.len()
                         );
 
@@ -967,6 +1022,7 @@ impl Cli {
         // Fetch events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
+        let retry_config = config.retry.clone();
         let events = client
             .fetch_batch_events(
                 from,
@@ -979,12 +1035,17 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         Ok(())
@@ -1083,6 +1144,117 @@ impl Cli {
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_address_summary(
+        &self,
+        cache: Cache,
+        output: OutputFormat,
+        min_stamps: u32,
+        show_delegated_only: bool,
+    ) -> Result<()> {
+        crate::commands::address_summary::execute(
+            cache,
+            output,
+            min_stamps,
+            show_delegated_only,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_migrations(&self, cache: Cache) -> Result<()> {
+        let migrations = cache.get_migration_status().await?;
+        let total = migrations.len();
+
+        println!("\n## Database Migration Status\n");
+        println!("{:<20} {:<50} {:<30}", "Version", "Description", "Applied At");
+        println!("{}", "-".repeat(100));
+
+        for migration in migrations {
+            println!(
+                "{:<20} {:<50} {:<30}",
+                migration.version,
+                migration.description,
+                migration.installed_on
+            );
+        }
+
+        println!("\n**Total migrations applied:** {total}\n");
+
+        Ok(())
+    }
+
+    async fn execute_reset(&self) -> Result<()> {
+        // Get database path from config
+        let config = self.resolve_config()?;
+        let db_path = &config.database.path;
+
+        // Determine if PostgreSQL or SQLite
+        let is_postgres = db_path.starts_with("postgres://") || db_path.starts_with("postgresql://");
+
+        // Show warning and get confirmation
+        println!("\n😱 WARNING: This will PERMANENTLY DELETE all data in the database!\n");
+        if is_postgres {
+            println!("Database: PostgreSQL ({db_path})");
+        } else {
+            println!("Database: SQLite ({db_path})");
+        }
+        println!("\nType 'yes' to confirm: ");
+
+        // Read user input
+        use std::io::{self, Write};
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if input.trim().to_lowercase() != "yes" {
+            println!("\n❌ Reset cancelled.");
+            return Ok(());
+        }
+
+        // Perform reset based on database type
+        if is_postgres {
+            // Extract database name from PostgreSQL URL
+            let db_name = if let Some(last_slash) = db_path.rfind('/') {
+                &db_path[last_slash + 1..]
+            } else {
+                return Err(anyhow::anyhow!("Invalid PostgreSQL URL: cannot extract database name"));
+            };
+
+            println!("\n♻️ Dropping PostgreSQL database '{db_name}'...");
+
+            // Drop and recreate database using psql
+            let drop_status = std::process::Command::new("psql")
+                .args(["-c", &format!("DROP DATABASE IF EXISTS {db_name};")])
+                .status()?;
+
+            if !drop_status.success() {
+                return Err(anyhow::anyhow!("Failed to drop database"));
+            }
+
+            let create_status = std::process::Command::new("psql")
+                .args(["-c", &format!("CREATE DATABASE {db_name};")])
+                .status()?;
+
+            if !create_status.success() {
+                return Err(anyhow::anyhow!("Failed to create database"));
+            }
+
+            println!("✅ PostgreSQL database '{db_name}' has been reset successfully!");
+        } else {
+            // SQLite - just delete the file
+            println!("\n♻️ Deleting SQLite database file...");
+
+            if std::path::Path::new(db_path).exists() {
+                std::fs::remove_file(db_path)?;
+            }
+
+            println!("✅ SQLite database '{db_path}' has been reset successfully!");
+            println!("   (Database will be recreated on next run)");
+        }
+
+        Ok(())
     }
 }
 
