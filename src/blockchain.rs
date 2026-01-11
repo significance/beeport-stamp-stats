@@ -900,6 +900,143 @@ impl BlockchainClient {
             .await
             .map_err(StampError::Rpc)
     }
+
+    /// Process address tracking for a batch of events
+    ///
+    /// This is the main integration point for Phase 3 address tracking.
+    /// For each event, it:
+    /// 1. Fetches/caches transaction details
+    /// 2. Detects if addresses are contracts
+    /// 3. Updates address records for owner/payer/sender
+    /// 4. Stores address interactions
+    pub async fn process_address_tracking(
+        &self,
+        events: &[StampEvent],
+        cache: &Cache,
+        retry_config: &RetryConfig,
+    ) -> Result<()> {
+        for event in events {
+            let tx_hash = &event.transaction_hash;
+            let block_number = event.block_number;
+            let block_timestamp = event.block_timestamp.timestamp();
+
+            // Check if we already have transaction details cached
+            let tx_details = match cache.get_transaction_details(tx_hash).await? {
+                Some(cached) => {
+                    tracing::debug!("Using cached transaction details for {}", tx_hash);
+                    cached
+                }
+                None => {
+                    // Fetch full transaction details from RPC
+                    tracing::debug!("Fetching transaction details for {}", tx_hash);
+                    let rpc_details = self.get_transaction_details(tx_hash, retry_config).await?;
+
+                    // Store in cache for future use
+                    cache.store_transaction_details(
+                        tx_hash,
+                        &rpc_details.from_address,
+                        rpc_details.to_address.as_deref(),
+                        &rpc_details.value,
+                        rpc_details.gas_price.as_deref(),
+                        rpc_details.gas_used.map(|g| g as u64),
+                        block_number,
+                        block_timestamp,
+                        Some(&rpc_details.input_data),
+                        rpc_details.is_contract_creation,
+                    ).await?;
+
+                    // Convert to cache format
+                    crate::cache::TransactionDetails {
+                        transaction_hash: tx_hash.to_string(),
+                        from_address: rpc_details.from_address,
+                        to_address: rpc_details.to_address,
+                        value: rpc_details.value,
+                        gas_price: rpc_details.gas_price,
+                        gas_used: rpc_details.gas_used.map(|g| g as u64),
+                        block_number,
+                        block_timestamp,
+                        input_data: Some(rpc_details.input_data),
+                        is_contract_creation: rpc_details.is_contract_creation,
+                        fetched_at: chrono::Utc::now().timestamp(),
+                    }
+                }
+            };
+
+            // Extract addresses from event data
+            let (owner, payer, amount_spent) = match &event.data {
+                EventData::BatchCreated {
+                    owner,
+                    payer,
+                    total_amount,
+                    ..
+                } => (Some(owner.as_str()), payer.as_deref(), Some(total_amount.as_str())),
+                EventData::BatchTopUp { payer, topup_amount, .. } => {
+                    (None, payer.as_deref(), Some(topup_amount.as_str()))
+                }
+                _ => (None, None, None),
+            };
+
+            let batch_id = event.batch_id.as_deref();
+            let sender = event.from_address.as_deref().unwrap_or(&tx_details.from_address);
+
+            // Process owner address (if present)
+            if let Some(owner_addr) = owner {
+                let is_contract = self.is_contract(owner_addr, retry_config).await.unwrap_or(false);
+                cache.upsert_address(
+                    owner_addr,
+                    batch_id,
+                    amount_spent,
+                    block_number,
+                    block_timestamp,
+                    is_contract,
+                ).await?;
+            }
+
+            // Process payer address (if different from owner)
+            if let Some(payer_addr) = payer {
+                if Some(payer_addr) != owner {
+                    let is_contract = self.is_contract(payer_addr, retry_config).await.unwrap_or(false);
+                    cache.upsert_address(
+                        payer_addr,
+                        batch_id,
+                        amount_spent,
+                        block_number,
+                        block_timestamp,
+                        is_contract,
+                    ).await?;
+                }
+            }
+
+            // Process sender address (transaction signer)
+            if let Some(owner_addr) = owner {
+                if sender != owner_addr {
+                    let is_contract = self.is_contract(sender, retry_config).await.unwrap_or(false);
+                    cache.upsert_address(
+                        sender,
+                        None, // Sender doesn't own the batch
+                        None, // Sender doesn't necessarily spend
+                        block_number,
+                        block_timestamp,
+                        is_contract,
+                    ).await?;
+
+                    // Record interaction: sender → owner (stamp purchase related)
+                    cache.store_address_interaction(
+                        sender,
+                        owner_addr,
+                        tx_hash,
+                        &tx_details.value,
+                        block_number,
+                        block_timestamp,
+                        true, // related to stamp
+                        batch_id,
+                    ).await?;
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// Transaction details from RPC

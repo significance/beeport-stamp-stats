@@ -646,6 +646,14 @@ impl Cli {
                         let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
+                        // Process address tracking (Phase 3)
+                        // This populates addresses, transaction_details, and address_interactions tables
+                        tracing::debug!("Processing address tracking for {} events", events_with_from.len());
+                        if let Err(e) = client.process_address_tracking(&events_with_from, &cache, &retry).await {
+                            tracing::warn!("Failed to process address tracking: {}", e);
+                            // Continue even if address tracking fails - it's supplementary data
+                        }
+
                         tracing::debug!(
                             "Stored {} postage stamp events and {} batches from chunk",
                             events_with_from.len(),
@@ -1047,6 +1055,13 @@ impl Cli {
                         // Store batch info for BatchCreated events in this chunk
                         let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
+
+                        // Process address tracking (Phase 3)
+                        // This populates addresses, transaction_details, and address_interactions tables
+                        if let Err(e) = client.process_address_tracking(&events_with_from, &cache, &retry).await {
+                            tracing::warn!("Failed to process address tracking: {}", e);
+                            // Continue even if address tracking fails - it's supplementary data
+                        }
 
                         Ok(())
                     }
