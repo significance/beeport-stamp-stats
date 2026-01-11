@@ -6,6 +6,50 @@
 **Branch:** feat/address-tracking-phase2
 **Goal:** Track addresses, their stamp ownership, funding relationships, and interactions
 
+---
+
+## 🚀 NEXT: Update beeport4 Production Database
+
+**After PR is merged, run full sync to populate address tracking tables:**
+
+```bash
+# 1. Verify current state
+./target/release/beeport-stamp-stats --cache-db "postgresql://localhost/beeport4" migrations
+
+# 2. Check last synced block
+psql -d beeport4 -c "SELECT MAX(block_number) FROM events;"
+
+# 3. Run sync to populate address tracking (from last block to latest)
+# This will:
+#   - Apply new migrations (addresses, address_interactions, transaction_details)
+#   - Populate address tracking for NEW events going forward
+#   - Cache transaction details to minimize RPC calls
+./target/release/beeport-stamp-stats --cache-db "postgresql://localhost/beeport4" sync
+
+# 4. Verify address tracking is working
+psql -d beeport4 -c "SELECT COUNT(*) FROM addresses;"
+psql -d beeport4 -c "SELECT COUNT(*) FROM transaction_details;"
+psql -d beeport4 -c "SELECT COUNT(*) FROM address_interactions;"
+
+# 5. Optional: Backfill historical data (Phase 5)
+# Run sync with explicit block range to process older events
+# Example: Process last 100k blocks
+# ./target/release/beeport-stamp-stats --cache-db "postgresql://localhost/beeport4" \
+#   sync --from-block <start> --to-block <end>
+```
+
+**Important:**
+- New address tracking is **incremental** - only processes new events during sync
+- Historical events in database won't have address tracking data until backfilled
+- Address tracking is **non-blocking** - won't break sync if it fails
+
+**Expected Results:**
+- `addresses` table will have entries for all owner/payer/sender addresses from new events
+- `transaction_details` will cache transaction info (1 cache entry can serve many events)
+- `address_interactions` will map funding relationships (sender → owner)
+
+---
+
 **Primary Database:** `beeport4` (PostgreSQL)
 **Database Status:**
 - ✅ Phase 2 schema migrations deployed (11 total migrations)
