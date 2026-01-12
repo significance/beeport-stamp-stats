@@ -4,6 +4,22 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 use std::path::Path;
 
+/// Format large numbers with thousand separators
+fn format_number(n: u128) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    let len = s.len();
+
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (len - i) % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+
+    result
+}
+
 #[derive(Clone)]
 enum DatabasePool {
     Sqlite(sqlx::SqlitePool),
@@ -1114,6 +1130,7 @@ impl Cache {
                         address: row.get("address"),
                         role: row.get("role"),
                         stamp_count: row.get("stamp_count"),
+                        total_capacity: "N/A".to_string(), // Old method doesn't calculate capacity
                         first_seen: row.get("first_seen"),
                         last_seen: row.get("last_seen"),
                         is_owner: row.get::<i64, _>("is_owner") != 0,
@@ -1198,6 +1215,328 @@ impl Cache {
                         address: row.get("address"),
                         role: row.get("role"),
                         stamp_count: row.get("stamp_count"),
+                        total_capacity: "N/A".to_string(), // Old method doesn't calculate capacity
+                        first_seen: row.get("first_seen"),
+                        last_seen: row.get("last_seen"),
+                        is_owner: row.get("is_owner"),
+                        is_payer: row.get("is_payer"),
+                        is_sender: row.get("is_sender"),
+                    });
+                }
+
+                Ok(summaries)
+            }
+        }
+    }
+
+    /// Get address summary with advanced filtering and capacity calculations
+    #[allow(clippy::too_many_arguments)]
+    pub async fn get_address_summary_filtered(
+        &self,
+        client: &crate::blockchain::BlockchainClient,
+        registry: &crate::contracts::ContractRegistry,
+        _config: &crate::config::AppConfig,
+        min_stamps: u32,
+        role: Option<crate::cli::RoleFilter>,
+        live_only: bool,
+        price: Option<String>,
+        _refresh: bool,
+        _cache_validity_blocks: u64,
+    ) -> Result<Vec<crate::commands::address_summary::AddressSummary>> {
+        use crate::commands::address_summary::AddressSummary;
+
+        // Get current block and price for TTL calculations if needed
+        let (current_block, current_price) = if live_only {
+            let block = client.get_current_block().await?;
+            let price_val = if let Some(p) = price {
+                p.parse::<u128>()
+                    .map_err(|e| crate::error::StampError::Parse(format!("Invalid price: {e}")))?
+            } else {
+                // Try to get cached price first
+                match self.get_cached_price().await {
+                    Ok(Some(cached_price)) => cached_price,
+                    _ => client.get_current_price(registry).await?,
+                }
+            };
+            (Some(block), Some(price_val))
+        } else {
+            (None, None)
+        };
+
+        // Build role filter SQL (PostgreSQL cannot use aliases in HAVING, need full expressions)
+        let role_filter_sqlite = match role {
+            Some(crate::cli::RoleFilter::Owner) => "AND is_owner",
+            Some(crate::cli::RoleFilter::Sender) => "AND is_sender",
+            Some(crate::cli::RoleFilter::OwnerAndSender) => "AND is_owner AND is_sender",
+            None => "",
+        };
+
+        let role_filter_postgres = match role {
+            Some(crate::cli::RoleFilter::Owner) => "AND (SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0)",
+            Some(crate::cli::RoleFilter::Sender) => "AND (SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0)",
+            Some(crate::cli::RoleFilter::OwnerAndSender) => "AND (SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0) AND (SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0)",
+            None => "",
+        };
+
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                // Build live filter SQL for SQLite
+                let live_filter = if live_only {
+                    let _block = current_block.unwrap();
+                    let price_val = current_price.unwrap();
+                    format!(
+                        r#"
+                        AND batch_id IN (
+                            SELECT b.batch_id
+                            FROM batches b
+                            LEFT JOIN batch_balances bb ON b.batch_id = bb.batch_id
+                            WHERE (bb.remaining_balance IS NOT NULL
+                                   AND CAST(bb.remaining_balance AS INTEGER) / ({price_val} * (1 << b.depth)) > 0)
+                               OR (bb.remaining_balance IS NULL
+                                   AND CAST(b.normalised_balance AS INTEGER) / ({price_val} * (1 << b.depth)) > 0)
+                        )
+                        "#
+                    )
+                } else {
+                    String::new()
+                };
+
+                let query = format!(
+                    r#"
+                    WITH address_batch_info AS (
+                        SELECT
+                            address,
+                            role,
+                            batch_id,
+                            block_timestamp
+                        FROM (
+                            SELECT
+                                COALESCE(json_extract(data, '$.BatchCreated.owner'), json_extract(data, '$.BatchTopUp.owner')) as address,
+                                'owner' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                              {live_filter}
+
+                            UNION ALL
+
+                            SELECT
+                                COALESCE(json_extract(data, '$.BatchCreated.payer'), json_extract(data, '$.BatchTopUp.payer')) as address,
+                                'payer' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                              AND COALESCE(json_extract(data, '$.BatchCreated.payer'), json_extract(data, '$.BatchTopUp.payer')) IS NOT NULL
+                              {live_filter}
+
+                            UNION ALL
+
+                            SELECT
+                                from_address as address,
+                                'sender' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE from_address IS NOT NULL
+                              {live_filter}
+                        ) all_addresses
+                        WHERE address IS NOT NULL
+                    ),
+                    address_roles AS (
+                        SELECT
+                            address,
+                            SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0 as is_owner,
+                            SUM(CASE WHEN role = 'payer' THEN 1 ELSE 0 END) > 0 as is_payer,
+                            SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0 as is_sender,
+                            COUNT(DISTINCT batch_id) as stamp_count,
+                            MIN(block_timestamp) as first_seen,
+                            MAX(block_timestamp) as last_seen
+                        FROM address_batch_info
+                        GROUP BY address
+                        HAVING stamp_count >= {min_stamps}
+                           {role_filter_sqlite}
+                    ),
+                    address_capacity AS (
+                        SELECT
+                            abi.address,
+                            SUM(1 << b.depth) as total_capacity
+                        FROM address_batch_info abi
+                        JOIN batches b ON abi.batch_id = b.batch_id
+                        WHERE abi.role = 'owner'
+                        GROUP BY abi.address
+                    )
+                    SELECT
+                        ar.address,
+                        CASE
+                            WHEN ar.is_owner AND ar.is_payer AND ar.is_sender THEN 'Owner+Payer+Sender'
+                            WHEN ar.is_owner AND ar.is_sender THEN 'Owner+Sender'
+                            WHEN ar.is_payer AND ar.is_sender THEN 'Payer+Sender'
+                            WHEN ar.is_owner AND ar.is_payer THEN 'Owner+Payer'
+                            WHEN ar.is_owner THEN 'Owner'
+                            WHEN ar.is_payer THEN 'Payer'
+                            WHEN ar.is_sender THEN 'Sender'
+                            ELSE 'Unknown'
+                        END as role,
+                        ar.stamp_count,
+                        COALESCE(ac.total_capacity, 0) as total_capacity,
+                        datetime(ar.first_seen, 'unixepoch') as first_seen,
+                        datetime(ar.last_seen, 'unixepoch') as last_seen,
+                        ar.is_owner,
+                        ar.is_payer,
+                        ar.is_sender
+                    FROM address_roles ar
+                    LEFT JOIN address_capacity ac ON ar.address = ac.address
+                    ORDER BY ar.stamp_count DESC, ar.address
+                    "#
+                );
+
+                let rows = sqlx::query(&query).fetch_all(pool).await?;
+
+                let mut summaries = Vec::new();
+                for row in rows {
+                    let capacity: i64 = row.get("total_capacity");
+                    summaries.push(AddressSummary {
+                        address: row.get("address"),
+                        role: row.get("role"),
+                        stamp_count: row.get("stamp_count"),
+                        total_capacity: format_number(capacity as u128),
+                        first_seen: row.get("first_seen"),
+                        last_seen: row.get("last_seen"),
+                        is_owner: row.get::<i64, _>("is_owner") != 0,
+                        is_payer: row.get::<i64, _>("is_payer") != 0,
+                        is_sender: row.get::<i64, _>("is_sender") != 0,
+                    });
+                }
+
+                Ok(summaries)
+            }
+            DatabasePool::Postgres(pool) => {
+                // Build live filter SQL for PostgreSQL
+                let live_filter = if live_only {
+                    let _block = current_block.unwrap();
+                    let price_val = current_price.unwrap();
+                    format!(
+                        r#"
+                        AND batch_id IN (
+                            SELECT b.batch_id
+                            FROM batches b
+                            LEFT JOIN batch_balances bb ON b.batch_id = bb.batch_id
+                            WHERE (bb.remaining_balance IS NOT NULL
+                                   AND CAST(bb.remaining_balance AS NUMERIC) / ({price_val} * POW(2, b.depth)) > 0)
+                               OR (bb.remaining_balance IS NULL
+                                   AND CAST(b.normalised_balance AS NUMERIC) / ({price_val} * POW(2, b.depth)) > 0)
+                        )
+                        "#
+                    )
+                } else {
+                    String::new()
+                };
+
+                let query = format!(
+                    r#"
+                    WITH address_batch_info AS (
+                        SELECT
+                            address,
+                            role,
+                            batch_id,
+                            block_timestamp
+                        FROM (
+                            SELECT
+                                data::jsonb->>'owner' as address,
+                                'owner' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                              {live_filter}
+
+                            UNION ALL
+
+                            SELECT
+                                data::jsonb->>'payer' as address,
+                                'payer' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE event_type IN ('BatchCreated', 'BatchTopUp')
+                              AND data::jsonb->>'payer' IS NOT NULL
+                              {live_filter}
+
+                            UNION ALL
+
+                            SELECT
+                                from_address as address,
+                                'sender' as role,
+                                batch_id,
+                                block_timestamp
+                            FROM events
+                            WHERE from_address IS NOT NULL
+                              {live_filter}
+                        ) all_addresses
+                        WHERE address IS NOT NULL
+                    ),
+                    address_roles AS (
+                        SELECT
+                            address,
+                            SUM(CASE WHEN role = 'owner' THEN 1 ELSE 0 END) > 0 as is_owner,
+                            SUM(CASE WHEN role = 'payer' THEN 1 ELSE 0 END) > 0 as is_payer,
+                            SUM(CASE WHEN role = 'sender' THEN 1 ELSE 0 END) > 0 as is_sender,
+                            COUNT(DISTINCT batch_id) as stamp_count,
+                            MIN(block_timestamp) as first_seen,
+                            MAX(block_timestamp) as last_seen
+                        FROM address_batch_info
+                        GROUP BY address
+                        HAVING COUNT(DISTINCT batch_id) >= {min_stamps}
+                           {role_filter_postgres}
+                    ),
+                    address_capacity AS (
+                        SELECT
+                            abi.address,
+                            SUM(POW(2, b.depth)::BIGINT) as total_capacity
+                        FROM address_batch_info abi
+                        JOIN batches b ON abi.batch_id = b.batch_id
+                        WHERE abi.role = 'owner'
+                        GROUP BY abi.address
+                    )
+                    SELECT
+                        ar.address,
+                        CASE
+                            WHEN ar.is_owner AND ar.is_payer AND ar.is_sender THEN 'Owner+Payer+Sender'
+                            WHEN ar.is_owner AND ar.is_sender THEN 'Owner+Sender'
+                            WHEN ar.is_payer AND ar.is_sender THEN 'Payer+Sender'
+                            WHEN ar.is_owner AND ar.is_payer THEN 'Owner+Payer'
+                            WHEN ar.is_owner THEN 'Owner'
+                            WHEN ar.is_payer THEN 'Payer'
+                            WHEN ar.is_sender THEN 'Sender'
+                            ELSE 'Unknown'
+                        END as role,
+                        ar.stamp_count,
+                        COALESCE(ac.total_capacity, 0)::TEXT as total_capacity,
+                        to_char(to_timestamp(ar.first_seen), 'YYYY-MM-DD HH24:MI:SS') as first_seen,
+                        to_char(to_timestamp(ar.last_seen), 'YYYY-MM-DD HH24:MI:SS') as last_seen,
+                        ar.is_owner,
+                        ar.is_payer,
+                        ar.is_sender
+                    FROM address_roles ar
+                    LEFT JOIN address_capacity ac ON ar.address = ac.address
+                    ORDER BY ar.stamp_count DESC, ar.address
+                    "#
+                );
+
+                let rows = sqlx::query(&query).fetch_all(pool).await?;
+
+                let mut summaries = Vec::new();
+                for row in rows {
+                    // PostgreSQL returns NUMERIC, need to parse as string
+                    let capacity_str: String = row.get("total_capacity");
+                    let capacity = capacity_str.parse::<u128>().unwrap_or(0);
+                    summaries.push(AddressSummary {
+                        address: row.get("address"),
+                        role: row.get("role"),
+                        stamp_count: row.get("stamp_count"),
+                        total_capacity: format_number(capacity),
                         first_seen: row.get("first_seen"),
                         last_seen: row.get("last_seen"),
                         is_owner: row.get("is_owner"),

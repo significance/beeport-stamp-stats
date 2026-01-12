@@ -264,6 +264,30 @@ pub enum Commands {
         /// Show only addresses where owner != from_address
         #[arg(long, default_value = "false")]
         show_delegated_only: bool,
+
+        /// Filter by role (owner, sender, or owner-and-sender)
+        #[arg(long)]
+        role: Option<RoleFilter>,
+
+        /// Show only addresses with live (non-expired) stamps
+        #[arg(long, default_value = "false")]
+        live_only: bool,
+
+        /// Override current storage price for TTL calculations (PLUR per chunk per block)
+        #[arg(long)]
+        price: Option<String>,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Maximum number of retries for rate-limited requests
+        #[arg(long, default_value = "20")]
+        max_retries: u32,
+
+        /// Cache validity in blocks (default: 518400 blocks = ~1 month at 5s/block)
+        #[arg(long, default_value = "518400")]
+        cache_validity_blocks: u64,
     },
 
     /// Show database migration status
@@ -364,6 +388,13 @@ pub enum ExpiryAnalyticsSortBy {
     Period,
     Chunks,
     Storage,
+}
+
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum RoleFilter {
+    Owner,
+    Sender,
+    OwnerAndSender,
 }
 
 impl From<ExportFormat> for export::ExportFormat {
@@ -565,12 +596,26 @@ impl Cli {
                 output,
                 min_stamps,
                 show_delegated_only,
+                role,
+                live_only,
+                price,
+                refresh,
+                max_retries: _,  // Ignored, use config
+                cache_validity_blocks,
             } => {
                 self.execute_address_summary(
                     cache,
+                    client,
+                    &registry,
+                    &config,
                     output.clone(),
                     *min_stamps,
                     *show_delegated_only,
+                    role.clone(),
+                    *live_only,
+                    price.clone(),
+                    *refresh,
+                    *cache_validity_blocks,
                 )
                 .await
             }
@@ -1146,18 +1191,35 @@ impl Cli {
         .map_err(|e| anyhow::anyhow!(e))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_address_summary(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         output: OutputFormat,
         min_stamps: u32,
         show_delegated_only: bool,
+        role: Option<RoleFilter>,
+        live_only: bool,
+        price: Option<String>,
+        refresh: bool,
+        cache_validity_blocks: u64,
     ) -> Result<()> {
         crate::commands::address_summary::execute(
             cache,
+            &client,
+            registry,
+            config,
             output,
             min_stamps,
             show_delegated_only,
+            role,
+            live_only,
+            price,
+            refresh,
+            cache_validity_blocks,
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))

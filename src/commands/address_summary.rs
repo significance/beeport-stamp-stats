@@ -1,5 +1,8 @@
+use crate::blockchain::BlockchainClient;
 use crate::cache::Cache;
-use crate::cli::OutputFormat;
+use crate::cli::{OutputFormat, RoleFilter};
+use crate::config::AppConfig;
+use crate::contracts::ContractRegistry;
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use tabled::Tabled;
@@ -15,6 +18,9 @@ pub struct AddressSummary {
 
     #[tabled(rename = "Stamps")]
     pub stamp_count: i64,
+
+    #[tabled(rename = "Total Capacity")]
+    pub total_capacity: String,
 
     #[tabled(rename = "First Activity")]
     pub first_seen: String,
@@ -54,21 +60,68 @@ pub struct DelegationCase {
     pub batch_id: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn execute(
     cache: Cache,
+    client: &BlockchainClient,
+    registry: &ContractRegistry,
+    config: &AppConfig,
     output: OutputFormat,
     min_stamps: u32,
     show_delegated_only: bool,
+    role: Option<RoleFilter>,
+    live_only: bool,
+    price: Option<String>,
+    refresh: bool,
+    cache_validity_blocks: u64,
 ) -> Result<()> {
     if show_delegated_only {
         execute_delegated_analysis(cache, output).await
     } else {
-        execute_full_summary(cache, output, min_stamps).await
+        execute_full_summary(
+            cache,
+            client,
+            registry,
+            config,
+            output,
+            min_stamps,
+            role,
+            live_only,
+            price,
+            refresh,
+            cache_validity_blocks,
+        )
+        .await
     }
 }
 
-async fn execute_full_summary(cache: Cache, output: OutputFormat, min_stamps: u32) -> Result<()> {
-    let addresses = cache.get_address_summary(min_stamps).await?;
+#[allow(clippy::too_many_arguments)]
+async fn execute_full_summary(
+    cache: Cache,
+    client: &BlockchainClient,
+    registry: &ContractRegistry,
+    config: &AppConfig,
+    output: OutputFormat,
+    min_stamps: u32,
+    role: Option<RoleFilter>,
+    live_only: bool,
+    price: Option<String>,
+    refresh: bool,
+    cache_validity_blocks: u64,
+) -> Result<()> {
+    let addresses = cache
+        .get_address_summary_filtered(
+            client,
+            registry,
+            config,
+            min_stamps,
+            role,
+            live_only,
+            price,
+            refresh,
+            cache_validity_blocks,
+        )
+        .await?;
 
     match output {
         OutputFormat::Table => {
@@ -81,13 +134,14 @@ async fn execute_full_summary(cache: Cache, output: OutputFormat, min_stamps: u3
             println!("{}", serde_json::to_string_pretty(&addresses)?);
         }
         OutputFormat::Csv => {
-            println!("address,role,stamp_count,first_seen,last_seen,is_owner,is_payer,is_sender");
+            println!("address,role,stamp_count,total_capacity,first_seen,last_seen,is_owner,is_payer,is_sender");
             for addr in &addresses {
                 println!(
-                    "{},{},{},{},{},{},{},{}",
+                    "{},{},{},{},{},{},{},{},{}",
                     addr.address,
                     addr.role,
                     addr.stamp_count,
+                    addr.total_capacity,
                     addr.first_seen,
                     addr.last_seen,
                     addr.is_owner,
