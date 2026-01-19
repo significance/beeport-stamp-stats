@@ -15,6 +15,8 @@ pub struct StampEvent {
     pub contract_source: String, // Which contract emitted this event (e.g., "PostageStamp")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<ContractAddress>, // Actual on-chain address of the contract
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_address: Option<String>, // Transaction sender (who signed the transaction)
     pub data: EventData,
 }
 
@@ -186,6 +188,7 @@ mod tests {
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
             contract_address: None,
+            from_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),

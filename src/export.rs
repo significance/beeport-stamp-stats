@@ -171,6 +171,7 @@ mod tests {
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
             contract_address: None,
+            from_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
@@ -201,6 +202,7 @@ mod tests {
             log_index: 0,
             contract_source: "PostageStamp".to_string(),
             contract_address: None,
+            from_address: None,
             data: EventData::BatchCreated {
                 total_amount: "1000000000000000000".to_string(),
                 normalised_balance: "500000000000000000".to_string(),
