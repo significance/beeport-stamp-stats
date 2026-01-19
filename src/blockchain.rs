@@ -7,6 +7,7 @@ use crate::contracts::{
 use crate::error::{Result, StampError};
 use crate::events::{BatchInfo, EventData, EventType, StampEvent, StorageIncentivesEvent};
 use crate::retry::RetryConfig;
+use crate::rpc_scheduler::RpcScheduler;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder, RootProvider};
 use alloy::rpc::types::{Block, BlockTransactionsKind, Filter, Log};
@@ -15,14 +16,29 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
+
+/// Information about a chunk to be fetched
+#[derive(Clone)]
+struct ChunkRequest {
+    contract_name: String,
+    _contract_address: Address,
+    from_block: u64,
+    to_block: u64,
+    chunk_num: usize,
+    total_chunks: usize,
+    chunk_hash: String,
+    filter: Filter,
+}
 
 #[derive(Clone)]
 pub struct BlockchainClient {
     provider: RootProvider<Http<Client>>,
+    scheduler: Option<Arc<RpcScheduler>>,
 }
 
 impl BlockchainClient {
-    /// Create a new blockchain client
+    /// Create a new blockchain client with a single RPC endpoint
     pub async fn new(rpc_url: &str) -> Result<Self> {
         let provider = ProviderBuilder::new().on_http(
             rpc_url
@@ -30,7 +46,21 @@ impl BlockchainClient {
                 .map_err(|e| StampError::Rpc(format!("Invalid RPC URL: {e}")))?,
         );
 
-        Ok(Self { provider })
+        Ok(Self {
+            provider,
+            scheduler: None,
+        })
+    }
+
+    /// Create a new blockchain client with multi-RPC scheduler
+    pub async fn with_scheduler(scheduler: Arc<RpcScheduler>) -> Result<Self> {
+        // Use the first endpoint's provider as fallback for non-parallelizable operations
+        let provider = scheduler.primary_provider().clone();
+
+        Ok(Self {
+            provider,
+            scheduler: Some(scheduler),
+        })
     }
 
     /// Fetch all batch-related events from all configured contracts
@@ -155,19 +185,19 @@ impl BlockchainClient {
             deployment_block
         );
 
-        // Fetch events in chunks to avoid RPC limits
+        // Phase 1: Collect all chunks that need fetching (not cached)
         let chunk_size = blockchain_config.chunk_size;
-        let mut current_from = adjusted_from_block;
-
         let total_blocks = to_block - adjusted_from_block + 1;
         let total_chunks = total_blocks.div_ceil(chunk_size);
+
+        let mut chunks_to_fetch = Vec::new();
+        let mut current_from = adjusted_from_block;
         let mut chunk_num = 0;
 
         while current_from <= to_block {
             let current_to = std::cmp::min(current_from + chunk_size - 1, to_block);
             chunk_num += 1;
 
-            // Generate cache hash for this chunk
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
@@ -194,30 +224,89 @@ impl BlockchainClient {
                 current_to
             );
 
-            // Create filter for all events from this contract
             let filter = Filter::new()
                 .address(contract_address)
                 .from_block(current_from)
                 .to_block(current_to);
 
-            // Use retry policy for rate limit handling
-            tracing::debug!(
-                "RPC: get_logs(contract={}, from_block={}, to_block={})",
-                contract.address(),
-                current_from,
-                current_to
-            );
-            let provider = &self.provider;
-            let logs = retry_config
-                .execute(|| async { provider.get_logs(&filter).await })
-                .await
-                .map_err(StampError::Rpc)?;
+            chunks_to_fetch.push(ChunkRequest {
+                contract_name: contract.name().to_string(),
+                _contract_address: contract_address,
+                from_block: current_from,
+                to_block: current_to,
+                chunk_num,
+                total_chunks: total_chunks as usize,
+                chunk_hash,
+                filter,
+            });
 
+            current_from = current_to + 1;
+        }
+
+        // Phase 2: Fetch all logs in parallel (if using scheduler) or sequentially (if single RPC)
+        if chunks_to_fetch.is_empty() {
+            tracing::info!("All chunks cached for {}", contract.name());
+            return Ok(events);
+        }
+
+        let all_logs = if let Some(ref scheduler) = self.scheduler {
+            // Multi-RPC mode: fetch all chunks in parallel using execute_many
+            tracing::info!(
+                "Fetching {} chunks in parallel for {}",
+                chunks_to_fetch.len(),
+                contract.name()
+            );
+
+            let operations: Vec<_> = chunks_to_fetch
+                .iter()
+                .map(|chunk| {
+                    let filter = chunk.filter.clone();
+                    move |provider: &RootProvider<Http<Client>>| {
+                        let provider_clone = provider.clone();
+                        Box::pin(async move {
+                            provider_clone
+                                .get_logs(&filter)
+                                .await
+                                .map_err(|e| StampError::Rpc(e.to_string()))
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Vec<Log>>> + Send>,
+                            >
+                    }
+                })
+                .collect();
+
+            scheduler.execute_many(operations).await?
+        } else {
+            // Single RPC mode: fetch chunks sequentially with retry logic
+            let mut results = Vec::new();
+            for chunk in &chunks_to_fetch {
+                tracing::debug!(
+                    "RPC: get_logs(contract={}, from_block={}, to_block={})",
+                    chunk.contract_name,
+                    chunk.from_block,
+                    chunk.to_block
+                );
+                let provider = &self.provider;
+                let filter = &chunk.filter;
+                let logs = retry_config
+                    .execute(|| async { provider.get_logs(filter).await })
+                    .await
+                    .map_err(StampError::Rpc)?;
+                results.push(logs);
+            }
+            results
+        };
+
+        // Phase 3: Process results (parse logs, cache chunks, call callbacks)
+        for (chunk, logs) in chunks_to_fetch.iter().zip(all_logs.iter()) {
             if !logs.is_empty() {
                 tracing::info!(
-                    "    Found {} logs from {} in this chunk",
+                    "    Found {} logs from {} in chunk {}/{}",
                     logs.len(),
-                    contract.name()
+                    chunk.contract_name,
+                    chunk.chunk_num,
+                    chunk.total_chunks
                 );
             }
 
@@ -228,7 +317,7 @@ impl BlockchainClient {
                 if let Some(event) = self
                     .parse_log(
                         contract,
-                        log,
+                        log.clone(),
                         cache,
                         &mut block_cache,
                         retry_config,
@@ -244,10 +333,10 @@ impl BlockchainClient {
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk_hash,
+                    &chunk.chunk_hash,
                     contract.address(),
-                    current_from,
-                    current_to,
+                    chunk.from_block,
+                    chunk.to_block,
                     parsed_events,
                 )
                 .await?;
@@ -256,8 +345,6 @@ impl BlockchainClient {
             if !chunk_events.is_empty() {
                 on_chunk_complete(chunk_events).await?;
             }
-
-            current_from = current_to + 1;
         }
 
         tracing::info!(
@@ -450,19 +537,19 @@ impl BlockchainClient {
             deployment_block
         );
 
-        // Fetch events in chunks to avoid RPC limits
+        // Phase 1: Collect all chunks that need fetching (not cached)
         let chunk_size = blockchain_config.chunk_size;
-        let mut current_from = adjusted_from_block;
-
         let total_blocks = to_block - adjusted_from_block + 1;
         let total_chunks = total_blocks.div_ceil(chunk_size);
+
+        let mut chunks_to_fetch = Vec::new();
+        let mut current_from = adjusted_from_block;
         let mut chunk_num = 0;
 
         while current_from <= to_block {
             let current_to = std::cmp::min(current_from + chunk_size - 1, to_block);
             chunk_num += 1;
 
-            // Generate cache hash for this chunk
             let chunk_hash =
                 Self::generate_chunk_hash(contract.address(), current_from, current_to);
 
@@ -489,30 +576,89 @@ impl BlockchainClient {
                 current_to
             );
 
-            // Create filter for all events from this contract
             let filter = Filter::new()
                 .address(contract_address)
                 .from_block(current_from)
                 .to_block(current_to);
 
-            // Use retry policy for rate limit handling
-            tracing::debug!(
-                "RPC: get_logs(contract={}, from_block={}, to_block={})",
-                contract.address(),
-                current_from,
-                current_to
-            );
-            let provider = &self.provider;
-            let logs = retry_config
-                .execute(|| async { provider.get_logs(&filter).await })
-                .await
-                .map_err(StampError::Rpc)?;
+            chunks_to_fetch.push(ChunkRequest {
+                contract_name: contract.name().to_string(),
+                _contract_address: contract_address,
+                from_block: current_from,
+                to_block: current_to,
+                chunk_num,
+                total_chunks: total_chunks as usize,
+                chunk_hash,
+                filter,
+            });
 
+            current_from = current_to + 1;
+        }
+
+        // Phase 2: Fetch all logs in parallel (if using scheduler) or sequentially (if single RPC)
+        if chunks_to_fetch.is_empty() {
+            tracing::info!("All chunks cached for {}", contract.name());
+            return Ok(events);
+        }
+
+        let all_logs = if let Some(ref scheduler) = self.scheduler {
+            // Multi-RPC mode: fetch all chunks in parallel using execute_many
+            tracing::info!(
+                "Fetching {} chunks in parallel for {}",
+                chunks_to_fetch.len(),
+                contract.name()
+            );
+
+            let operations: Vec<_> = chunks_to_fetch
+                .iter()
+                .map(|chunk| {
+                    let filter = chunk.filter.clone();
+                    move |provider: &RootProvider<Http<Client>>| {
+                        let provider_clone = provider.clone();
+                        Box::pin(async move {
+                            provider_clone
+                                .get_logs(&filter)
+                                .await
+                                .map_err(|e| StampError::Rpc(e.to_string()))
+                        })
+                            as std::pin::Pin<
+                                Box<dyn std::future::Future<Output = Result<Vec<Log>>> + Send>,
+                            >
+                    }
+                })
+                .collect();
+
+            scheduler.execute_many(operations).await?
+        } else {
+            // Single RPC mode: fetch chunks sequentially with retry logic
+            let mut results = Vec::new();
+            for chunk in &chunks_to_fetch {
+                tracing::debug!(
+                    "RPC: get_logs(contract={}, from_block={}, to_block={})",
+                    chunk.contract_name,
+                    chunk.from_block,
+                    chunk.to_block
+                );
+                let provider = &self.provider;
+                let filter = &chunk.filter;
+                let logs = retry_config
+                    .execute(|| async { provider.get_logs(filter).await })
+                    .await
+                    .map_err(StampError::Rpc)?;
+                results.push(logs);
+            }
+            results
+        };
+
+        // Phase 3: Process results (parse logs, cache chunks, call callbacks)
+        for (chunk, logs) in chunks_to_fetch.iter().zip(all_logs.iter()) {
             if !logs.is_empty() {
                 tracing::info!(
-                    "    Found {} logs from {} in this chunk",
+                    "    Found {} logs from {} in chunk {}/{}",
                     logs.len(),
-                    contract.name()
+                    chunk.contract_name,
+                    chunk.chunk_num,
+                    chunk.total_chunks
                 );
             }
 
@@ -523,7 +669,7 @@ impl BlockchainClient {
                 if let Some(event) = self
                     .parse_storage_incentives_log(
                         contract,
-                        log,
+                        log.clone(),
                         cache,
                         &mut block_cache,
                         retry_config,
@@ -539,10 +685,10 @@ impl BlockchainClient {
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk_hash,
+                    &chunk.chunk_hash,
                     contract.address(),
-                    current_from,
-                    current_to,
+                    chunk.from_block,
+                    chunk.to_block,
                     parsed_events,
                 )
                 .await?;
@@ -551,8 +697,6 @@ impl BlockchainClient {
             if !chunk_events.is_empty() {
                 on_chunk_complete(chunk_events).await?;
             }
-
-            current_from = current_to + 1;
         }
 
         tracing::info!(

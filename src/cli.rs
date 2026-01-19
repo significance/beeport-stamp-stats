@@ -14,6 +14,8 @@ use crate::{
     hooks::{EventHook, StubHook},
 };
 
+use crate::rpc_scheduler::RpcScheduler;
+
 /// Beeport Postage Stamp Statistics Tool
 ///
 /// Track and analyze Swarm postage stamp batch events on Gnosis Chain
@@ -389,7 +391,7 @@ impl Cli {
 
         // Apply CLI overrides
         if let Some(rpc_url) = &self.rpc_url {
-            config.rpc.url = rpc_url.clone();
+            config.rpc.set_url(rpc_url.clone());
         }
 
         if let Some(cache_db) = &self.cache_db {
@@ -415,11 +417,43 @@ impl Cli {
         let registry = ContractRegistry::from_config(&config)?;
         let si_registry = StorageIncentivesContractRegistry::from_config(&config)?;
 
-        // Initialize blockchain client
-        let client = BlockchainClient::new(&config.rpc.url).await?;
-
         // Initialize cache
         let cache = Cache::new(&PathBuf::from(&config.database.path)).await?;
+
+        // Check if multi-RPC is configured
+        let rpc_endpoints = config.rpc.endpoints();
+        let use_multi_rpc = rpc_endpoints.len() > 1;
+
+        if use_multi_rpc {
+            tracing::info!("Multi-RPC mode enabled with {} endpoints", rpc_endpoints.len());
+            for (i, endpoint) in rpc_endpoints.iter().enumerate() {
+                tracing::info!("  RPC #{}: {}", i + 1, endpoint.url);
+            }
+        }
+
+        // Initialize RPC scheduler (if multi-RPC) or single client
+        let scheduler = if use_multi_rpc {
+            use std::sync::Arc;
+
+            let sched: Arc<RpcScheduler> = Arc::new(
+                RpcScheduler::new(
+                    rpc_endpoints,
+                    config.rate_limiting.clone(),
+                    Arc::new(cache.clone()),
+                )
+                .await?,
+            );
+            Some(sched)
+        } else {
+            None
+        };
+
+        // Initialize blockchain client (multi-RPC if scheduler available, single RPC otherwise)
+        let client = if let Some(ref scheduler) = scheduler {
+            BlockchainClient::with_scheduler(scheduler.clone()).await?
+        } else {
+            BlockchainClient::new(&config.rpc.primary_url()).await?
+        };
 
         match &self.command {
             Commands::Fetch {
@@ -576,7 +610,14 @@ impl Cli {
             }
             Commands::Migrations => self.execute_migrations(cache).await,
             Commands::Reset => unreachable!("Reset command handled early"),
+        }?;
+
+        // Print RPC stats if multi-RPC mode was used
+        if let Some(scheduler) = scheduler {
+            scheduler.print_stats().await;
         }
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]

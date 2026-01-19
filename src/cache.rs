@@ -1328,6 +1328,160 @@ impl Cache {
             }
         }
     }
+    /// Store or update RPC rate limit information
+    pub async fn upsert_rpc_rate_limit(
+        &self,
+        rpc_url: &str,
+        discovered_rate_limit: f64,
+        strategy: &str,
+        total_requests: u64,
+        rate_limit_errors: u64,
+        measured_rps: f64,
+        consecutive_successes: u32,
+    ) -> Result<()> {
+        let success_rate = if total_requests > 0 {
+            1.0 - (rate_limit_errors as f64 / total_requests as f64)
+        } else {
+            1.0
+        };
+
+        match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO rpc_rate_limits (
+                        rpc_url, discovered_rate_limit, rate_limit_strategy,
+                        total_requests, rate_limit_errors, success_rate,
+                        measured_rps, consecutive_successes, last_updated_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                    ON CONFLICT (rpc_url) DO UPDATE SET
+                        discovered_rate_limit = $2,
+                        rate_limit_strategy = $3,
+                        total_requests = $4,
+                        rate_limit_errors = $5,
+                        success_rate = $6,
+                        measured_rps = $7,
+                        consecutive_successes = $8,
+                        last_updated_at = NOW()
+                    "#,
+                )
+                .bind(rpc_url)
+                .bind(discovered_rate_limit)
+                .bind(strategy)
+                .bind(total_requests as i64)
+                .bind(rate_limit_errors as i64)
+                .bind(success_rate)
+                .bind(measured_rps)
+                .bind(consecutive_successes as i32)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO rpc_rate_limits (
+                        rpc_url, discovered_rate_limit, rate_limit_strategy,
+                        total_requests, rate_limit_errors, success_rate,
+                        measured_rps, consecutive_successes, last_updated_at
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+                    ON CONFLICT (rpc_url) DO UPDATE SET
+                        discovered_rate_limit = ?2,
+                        rate_limit_strategy = ?3,
+                        total_requests = ?4,
+                        rate_limit_errors = ?5,
+                        success_rate = ?6,
+                        measured_rps = ?7,
+                        consecutive_successes = ?8,
+                        last_updated_at = datetime('now')
+                    "#,
+                )
+                .bind(rpc_url)
+                .bind(discovered_rate_limit)
+                .bind(strategy)
+                .bind(total_requests as i64)
+                .bind(rate_limit_errors as i64)
+                .bind(success_rate)
+                .bind(measured_rps)
+                .bind(consecutive_successes as i32)
+                .execute(pool)
+                .await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get previously discovered rate limit for an RPC
+    pub async fn get_rpc_rate_limit(&self, rpc_url: &str) -> Result<Option<f64>> {
+        let rate_limit = match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                sqlx::query_scalar::<_, f64>(
+                    "SELECT discovered_rate_limit FROM rpc_rate_limits WHERE rpc_url = $1 AND is_active = TRUE"
+                )
+                .bind(rpc_url)
+                .fetch_optional(pool)
+                .await?
+            }
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query_scalar::<_, f64>(
+                    "SELECT discovered_rate_limit FROM rpc_rate_limits WHERE rpc_url = ?1 AND is_active = 1"
+                )
+                .bind(rpc_url)
+                .fetch_optional(pool)
+                .await?
+            }
+        };
+
+        Ok(rate_limit)
+    }
+
+    /// Get all RPC rate limit statistics
+    pub async fn get_all_rpc_stats(&self) -> Result<Vec<RpcRateLimitStats>> {
+        let stats = match &self.pool {
+            DatabasePool::Postgres(pool) => {
+                sqlx::query_as::<_, RpcRateLimitStats>(
+                    r#"
+                    SELECT
+                        rpc_url,
+                        discovered_rate_limit,
+                        rate_limit_strategy,
+                        total_requests,
+                        rate_limit_errors,
+                        success_rate,
+                        measured_rps,
+                        EXTRACT(EPOCH FROM (NOW() - last_updated_at)) as seconds_since_update
+                    FROM rpc_rate_limits
+                    WHERE is_active = TRUE
+                    ORDER BY last_updated_at DESC
+                    "#,
+                )
+                .fetch_all(pool)
+                .await?
+            }
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query_as::<_, RpcRateLimitStats>(
+                    r#"
+                    SELECT
+                        rpc_url,
+                        discovered_rate_limit,
+                        rate_limit_strategy,
+                        total_requests,
+                        rate_limit_errors,
+                        success_rate,
+                        measured_rps,
+                        (julianday('now') - julianday(last_updated_at)) * 86400 as seconds_since_update
+                    FROM rpc_rate_limits
+                    WHERE is_active = 1
+                    ORDER BY last_updated_at DESC
+                    "#,
+                )
+                .fetch_all(pool)
+                .await?
+            }
+        };
+
+        Ok(stats)
+    }
 }
 
 /// Migration information
@@ -1336,6 +1490,20 @@ pub struct MigrationInfo {
     pub version: String,
     pub description: String,
     pub installed_on: String,
+}
+
+/// RPC rate limit statistics
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RpcRateLimitStats {
+    pub rpc_url: String,
+    pub discovered_rate_limit: f64,
+    pub rate_limit_strategy: String,
+    pub total_requests: i64,
+    pub rate_limit_errors: i64,
+    pub success_rate: f64,
+    pub measured_rps: Option<f64>,
+    pub seconds_since_update: f64,
+>>>>>>> abb7b93 (feat: implement true parallel RPC request execution)
 }
 
 #[cfg(test)]
