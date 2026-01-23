@@ -163,6 +163,91 @@ pub struct StorageIncentivesEvent {
     pub chunk_address: Option<String>,
 }
 
+// ============================================================================
+// Payment Channel Events (Bandwidth Incentives)
+// ============================================================================
+
+/// Chequebook deployment info (from factory SimpleSwapDeployed event)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChequebookDeployment {
+    pub chequebook_address: String,
+    pub factory_address: String,
+    pub deployed_at_block: u64,
+    pub deployed_at_timestamp: DateTime<Utc>,
+    pub transaction_hash: String,
+    pub issuer_address: Option<String>, // Extracted from transaction or init event
+    pub overlay_address: Option<String>, // Swarm overlay (if available)
+}
+
+/// Payment channel event (from ERC20SimpleSwap contracts)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentChannelEvent {
+    // Core event metadata
+    pub event_type: PaymentChannelEventType,
+    pub chequebook_address: String,
+    pub block_number: u64,
+    pub block_timestamp: DateTime<Utc>,
+    pub transaction_hash: String,
+    pub log_index: u64,
+
+    // Event-specific data
+    pub data: PaymentChannelEventData,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PaymentChannelEventType {
+    ChequeCashed,
+    ChequeBounced,
+    HardDepositAmountChanged,
+    HardDepositDecreasePrepared,
+    HardDepositTimeoutChanged,
+    Withdraw,
+}
+
+impl std::fmt::Display for PaymentChannelEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PaymentChannelEventType::ChequeCashed => write!(f, "ChequeCashed"),
+            PaymentChannelEventType::ChequeBounced => write!(f, "ChequeBounced"),
+            PaymentChannelEventType::HardDepositAmountChanged => write!(f, "HardDepositAmountChanged"),
+            PaymentChannelEventType::HardDepositDecreasePrepared => write!(f, "HardDepositDecreasePrepared"),
+            PaymentChannelEventType::HardDepositTimeoutChanged => write!(f, "HardDepositTimeoutChanged"),
+            PaymentChannelEventType::Withdraw => write!(f, "Withdraw"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PaymentChannelEventData {
+    ChequeCashed {
+        beneficiary: String,
+        recipient: String,
+        caller: String,
+        total_payout: String,      // uint256 as string
+        cumulative_payout: String, // uint256 as string
+        caller_payout: String,     // uint256 as string
+    },
+    ChequeBounced {
+        // No additional fields
+    },
+    HardDepositAmountChanged {
+        beneficiary: String,
+        amount: String, // uint256 as string
+    },
+    HardDepositDecreasePrepared {
+        beneficiary: String,
+        decrease_amount: String, // uint256 as string
+    },
+    HardDepositTimeoutChanged {
+        beneficiary: String,
+        timeout: u64,
+    },
+    Withdraw {
+        amount: String, // uint256 as string
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

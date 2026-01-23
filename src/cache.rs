@@ -1,5 +1,8 @@
 use crate::error::Result;
-use crate::events::{BatchInfo, EventData, EventType, StampEvent, StorageIncentivesEvent};
+use crate::events::{
+    BatchInfo, ChequebookDeployment, EventData, EventType, PaymentChannelEvent,
+    PaymentChannelEventData, StampEvent, StorageIncentivesEvent,
+};
 use chrono::{DateTime, Duration, Utc};
 use sqlx::Row;
 use std::path::Path;
@@ -1666,6 +1669,470 @@ impl Cache {
                 Ok(migrations)
             }
         }
+    }
+
+    // ========================================================================
+    // Payment Channel Methods (Bandwidth Incentives)
+    // ========================================================================
+
+    /// Store chequebook deployment info
+    pub async fn store_chequebook_deployment(&self, deployment: &ChequebookDeployment) -> Result<()> {
+        let deployed_timestamp = deployment.deployed_at_timestamp.timestamp();
+        let discovered_timestamp = Utc::now().timestamp();
+
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT OR REPLACE INTO payment_channel_deployments
+                    (chequebook_address, factory_address, deployed_at_block, deployed_at_timestamp,
+                     transaction_hash, issuer_address, overlay_address, discovered_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(&deployment.chequebook_address)
+                .bind(&deployment.factory_address)
+                .bind(deployment.deployed_at_block as i64)
+                .bind(deployed_timestamp)
+                .bind(&deployment.transaction_hash)
+                .bind(&deployment.issuer_address)
+                .bind(&deployment.overlay_address)
+                .bind(discovered_timestamp)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    INSERT INTO payment_channel_deployments
+                    (chequebook_address, factory_address, deployed_at_block, deployed_at_timestamp,
+                     transaction_hash, issuer_address, overlay_address, discovered_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (chequebook_address) DO UPDATE SET
+                        factory_address = EXCLUDED.factory_address,
+                        deployed_at_block = EXCLUDED.deployed_at_block,
+                        deployed_at_timestamp = EXCLUDED.deployed_at_timestamp,
+                        transaction_hash = EXCLUDED.transaction_hash,
+                        issuer_address = EXCLUDED.issuer_address,
+                        overlay_address = EXCLUDED.overlay_address
+                    "#,
+                )
+                .bind(&deployment.chequebook_address)
+                .bind(&deployment.factory_address)
+                .bind(deployment.deployed_at_block as i64)
+                .bind(deployed_timestamp)
+                .bind(&deployment.transaction_hash)
+                .bind(&deployment.issuer_address)
+                .bind(&deployment.overlay_address)
+                .bind(discovered_timestamp)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Store payment channel events
+    pub async fn store_payment_channel_events(&self, events: &[PaymentChannelEvent]) -> Result<()> {
+        for event in events {
+            // Convert event data to database fields
+            let (beneficiary, recipient, caller, total_payout, cumulative_payout, caller_payout,
+                 deposit_beneficiary, deposit_amount, deposit_decrease_amount, deposit_timeout,
+                 withdraw_amount) = match &event.data {
+                PaymentChannelEventData::ChequeCashed {
+                    beneficiary,
+                    recipient,
+                    caller,
+                    total_payout,
+                    cumulative_payout,
+                    caller_payout,
+                } => (
+                    Some(beneficiary.clone()),
+                    Some(recipient.clone()),
+                    Some(caller.clone()),
+                    Some(total_payout.clone()),
+                    Some(cumulative_payout.clone()),
+                    Some(caller_payout.clone()),
+                    None, None, None, None, None,
+                ),
+                PaymentChannelEventData::ChequeBounced {} => (
+                    None, None, None, None, None, None, None, None, None, None, None,
+                ),
+                PaymentChannelEventData::HardDepositAmountChanged { beneficiary, amount } => (
+                    None, None, None, None, None, None,
+                    Some(beneficiary.clone()), Some(amount.clone()), None, None, None,
+                ),
+                PaymentChannelEventData::HardDepositDecreasePrepared { beneficiary, decrease_amount } => (
+                    None, None, None, None, None, None,
+                    Some(beneficiary.clone()), None, Some(decrease_amount.clone()), None, None,
+                ),
+                PaymentChannelEventData::HardDepositTimeoutChanged { beneficiary, timeout } => (
+                    None, None, None, None, None, None,
+                    Some(beneficiary.clone()), None, None, Some(*timeout as i64), None,
+                ),
+                PaymentChannelEventData::Withdraw { amount } => (
+                    None, None, None, None, None, None, None, None, None, None, Some(amount.clone()),
+                ),
+            };
+
+            let event_type_str = event.event_type.to_string();
+            let block_timestamp = event.block_timestamp.timestamp();
+
+            match &self.pool {
+                DatabasePool::Sqlite(pool) => {
+                    let data_json = serde_json::to_string(&event.data)?;
+                    sqlx::query(
+                        r#"
+                        INSERT OR REPLACE INTO payment_channel_events
+                        (event_type, chequebook_address, block_number, block_timestamp,
+                         transaction_hash, log_index, beneficiary, recipient, caller,
+                         total_payout, cumulative_payout, caller_payout,
+                         deposit_beneficiary, deposit_amount, deposit_decrease_amount, deposit_timeout,
+                         withdraw_amount, data)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        "#,
+                    )
+                    .bind(&event_type_str)
+                    .bind(&event.chequebook_address)
+                    .bind(event.block_number as i64)
+                    .bind(block_timestamp)
+                    .bind(&event.transaction_hash)
+                    .bind(event.log_index as i64)
+                    .bind(&beneficiary)
+                    .bind(&recipient)
+                    .bind(&caller)
+                    .bind(&total_payout)
+                    .bind(&cumulative_payout)
+                    .bind(&caller_payout)
+                    .bind(&deposit_beneficiary)
+                    .bind(&deposit_amount)
+                    .bind(&deposit_decrease_amount)
+                    .bind(&deposit_timeout)
+                    .bind(&withdraw_amount)
+                    .bind(&data_json)
+                    .execute(pool)
+                    .await?;
+                }
+                DatabasePool::Postgres(pool) => {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO payment_channel_events
+                        (event_type, chequebook_address, block_number, block_timestamp,
+                         transaction_hash, log_index, beneficiary, recipient, caller,
+                         total_payout, cumulative_payout, caller_payout,
+                         deposit_beneficiary, deposit_amount, deposit_decrease_amount, deposit_timeout,
+                         withdraw_amount, data)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                        ON CONFLICT (transaction_hash, log_index) DO NOTHING
+                        "#,
+                    )
+                    .bind(&event_type_str)
+                    .bind(&event.chequebook_address)
+                    .bind(event.block_number as i64)
+                    .bind(block_timestamp)
+                    .bind(&event.transaction_hash)
+                    .bind(event.log_index as i64)
+                    .bind(&beneficiary)
+                    .bind(&recipient)
+                    .bind(&caller)
+                    .bind(&total_payout)
+                    .bind(&cumulative_payout)
+                    .bind(&caller_payout)
+                    .bind(&deposit_beneficiary)
+                    .bind(&deposit_amount)
+                    .bind(&deposit_decrease_amount)
+                    .bind(&deposit_timeout)
+                    .bind(&withdraw_amount)
+                    .bind(sqlx::types::Json(&event.data))
+                    .execute(pool)
+                    .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Get all discovered chequebook addresses
+    pub async fn get_discovered_chequebooks(&self) -> Result<Vec<ChequebookDeployment>> {
+        let deployments = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let rows = sqlx::query(
+                    r#"
+                    SELECT chequebook_address, factory_address, deployed_at_block,
+                           deployed_at_timestamp, transaction_hash, issuer_address, overlay_address
+                    FROM payment_channel_deployments
+                    ORDER BY deployed_at_block ASC
+                    "#,
+                )
+                .fetch_all(pool)
+                .await?;
+
+                let mut deployments = Vec::new();
+                for row in rows {
+                    let deployed_at_block: i64 = row.get("deployed_at_block");
+                    let deployed_at_timestamp: i64 = row.get("deployed_at_timestamp");
+                    deployments.push(ChequebookDeployment {
+                        chequebook_address: row.get("chequebook_address"),
+                        factory_address: row.get("factory_address"),
+                        deployed_at_block: deployed_at_block as u64,
+                        deployed_at_timestamp: DateTime::from_timestamp(deployed_at_timestamp, 0)
+                            .unwrap_or_else(Utc::now),
+                        transaction_hash: row.get("transaction_hash"),
+                        issuer_address: row.get("issuer_address"),
+                        overlay_address: row.get("overlay_address"),
+                    });
+                }
+                deployments
+            }
+            DatabasePool::Postgres(pool) => {
+                let rows = sqlx::query(
+                    r#"
+                    SELECT chequebook_address, factory_address, deployed_at_block,
+                           deployed_at_timestamp, transaction_hash, issuer_address, overlay_address
+                    FROM payment_channel_deployments
+                    ORDER BY deployed_at_block ASC
+                    "#,
+                )
+                .fetch_all(pool)
+                .await?;
+
+                let mut deployments = Vec::new();
+                for row in rows {
+                    let deployed_at_block: i64 = row.get("deployed_at_block");
+                    let deployed_at_timestamp: i64 = row.get("deployed_at_timestamp");
+                    deployments.push(ChequebookDeployment {
+                        chequebook_address: row.get("chequebook_address"),
+                        factory_address: row.get("factory_address"),
+                        deployed_at_block: deployed_at_block as u64,
+                        deployed_at_timestamp: DateTime::from_timestamp(deployed_at_timestamp, 0)
+                            .unwrap_or_else(Utc::now),
+                        transaction_hash: row.get("transaction_hash"),
+                        issuer_address: row.get("issuer_address"),
+                        overlay_address: row.get("overlay_address"),
+                    });
+                }
+                deployments
+            }
+        };
+
+        Ok(deployments)
+    }
+
+    /// Get payment channel events from database
+    pub async fn get_payment_channel_events(
+        &self,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        event_type_filter: Option<&str>,
+    ) -> Result<Vec<PaymentChannelEvent>> {
+        use crate::events::{PaymentChannelEventData, PaymentChannelEventType};
+
+        let from = from_block.unwrap_or(0);
+        let to = to_block.unwrap_or(u64::MAX);
+
+        let events = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let query = if let Some(event_type) = event_type_filter {
+                    sqlx::query(
+                        r#"
+                        SELECT event_type, chequebook_address, block_number, block_timestamp,
+                               transaction_hash, log_index, data
+                        FROM payment_channel_events
+                        WHERE block_number >= ? AND block_number <= ? AND event_type = ?
+                        ORDER BY block_number ASC, log_index ASC
+                        "#,
+                    )
+                    .bind(from as i64)
+                    .bind(to as i64)
+                    .bind(event_type)
+                } else {
+                    sqlx::query(
+                        r#"
+                        SELECT event_type, chequebook_address, block_number, block_timestamp,
+                               transaction_hash, log_index, data
+                        FROM payment_channel_events
+                        WHERE block_number >= ? AND block_number <= ?
+                        ORDER BY block_number ASC, log_index ASC
+                        "#,
+                    )
+                    .bind(from as i64)
+                    .bind(to as i64)
+                };
+
+                let rows = query.fetch_all(pool).await?;
+
+                let mut events = Vec::new();
+                for row in rows {
+                    let event_type_str: String = row.get("event_type");
+                    let event_type = match event_type_str.as_str() {
+                        "ChequeCashed" => PaymentChannelEventType::ChequeCashed,
+                        "ChequeBounced" => PaymentChannelEventType::ChequeBounced,
+                        "HardDepositAmountChanged" => {
+                            PaymentChannelEventType::HardDepositAmountChanged
+                        }
+                        "HardDepositDecreasePrepared" => {
+                            PaymentChannelEventType::HardDepositDecreasePrepared
+                        }
+                        "HardDepositTimeoutChanged" => {
+                            PaymentChannelEventType::HardDepositTimeoutChanged
+                        }
+                        "Withdraw" => PaymentChannelEventType::Withdraw,
+                        _ => continue,
+                    };
+
+                    let data_str: String = row.get("data");
+                    let data: PaymentChannelEventData = serde_json::from_str(&data_str)?;
+
+                    let timestamp: i64 = row.get("block_timestamp");
+                    let block_timestamp =
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+
+                    events.push(PaymentChannelEvent {
+                        event_type,
+                        chequebook_address: row.get("chequebook_address"),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp,
+                        transaction_hash: row.get("transaction_hash"),
+                        log_index: row.get::<i64, _>("log_index") as u64,
+                        data,
+                    });
+                }
+                events
+            }
+            DatabasePool::Postgres(pool) => {
+                let query = if let Some(event_type) = event_type_filter {
+                    sqlx::query(
+                        r#"
+                        SELECT event_type, chequebook_address, block_number, block_timestamp,
+                               transaction_hash, log_index, data
+                        FROM payment_channel_events
+                        WHERE block_number >= $1 AND block_number <= $2 AND event_type = $3
+                        ORDER BY block_number ASC, log_index ASC
+                        "#,
+                    )
+                    .bind(from as i64)
+                    .bind(to as i64)
+                    .bind(event_type)
+                } else {
+                    sqlx::query(
+                        r#"
+                        SELECT event_type, chequebook_address, block_number, block_timestamp,
+                               transaction_hash, log_index, data
+                        FROM payment_channel_events
+                        WHERE block_number >= $1 AND block_number <= $2
+                        ORDER BY block_number ASC, log_index ASC
+                        "#,
+                    )
+                    .bind(from as i64)
+                    .bind(to as i64)
+                };
+
+                let rows = query.fetch_all(pool).await?;
+
+                let mut events = Vec::new();
+                for row in rows {
+                    let event_type_str: String = row.get("event_type");
+                    let event_type = match event_type_str.as_str() {
+                        "ChequeCashed" => PaymentChannelEventType::ChequeCashed,
+                        "ChequeBounced" => PaymentChannelEventType::ChequeBounced,
+                        "HardDepositAmountChanged" => {
+                            PaymentChannelEventType::HardDepositAmountChanged
+                        }
+                        "HardDepositDecreasePrepared" => {
+                            PaymentChannelEventType::HardDepositDecreasePrepared
+                        }
+                        "HardDepositTimeoutChanged" => {
+                            PaymentChannelEventType::HardDepositTimeoutChanged
+                        }
+                        "Withdraw" => PaymentChannelEventType::Withdraw,
+                        _ => continue,
+                    };
+
+                    let data_json: serde_json::Value = row.get("data");
+                    let data: PaymentChannelEventData = serde_json::from_value(data_json)?;
+
+                    let timestamp: i64 = row.get("block_timestamp");
+                    let block_timestamp =
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+
+                    events.push(PaymentChannelEvent {
+                        event_type,
+                        chequebook_address: row.get("chequebook_address"),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp,
+                        transaction_hash: row.get("transaction_hash"),
+                        log_index: row.get::<i64, _>("log_index") as u64,
+                        data,
+                    });
+                }
+                events
+            }
+        };
+
+        Ok(events)
+    }
+
+    /// Get last scanned block for factory (used for incremental discovery)
+    pub async fn get_last_factory_scan_block(&self, factory_address: &str) -> Result<Option<u64>> {
+        let max_block: Option<i64> = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let row = sqlx::query(
+                    "SELECT MAX(deployed_at_block) as max_block FROM payment_channel_deployments WHERE factory_address = ?"
+                )
+                .bind(factory_address)
+                .fetch_one(pool)
+                .await?;
+                row.get("max_block")
+            }
+            DatabasePool::Postgres(pool) => {
+                let row = sqlx::query(
+                    "SELECT MAX(deployed_at_block) as max_block FROM payment_channel_deployments WHERE factory_address = $1"
+                )
+                .bind(factory_address)
+                .fetch_one(pool)
+                .await?;
+                row.get("max_block")
+            }
+        };
+        Ok(max_block.map(|b| b as u64))
+    }
+
+    /// Count total payment channel events
+    pub async fn count_payment_channel_events(&self) -> Result<u64> {
+        let count: i64 = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let row = sqlx::query("SELECT COUNT(*) as count FROM payment_channel_events")
+                    .fetch_one(pool)
+                    .await?;
+                row.get("count")
+            }
+            DatabasePool::Postgres(pool) => {
+                let row = sqlx::query("SELECT COUNT(*) as count FROM payment_channel_events")
+                    .fetch_one(pool)
+                    .await?;
+                row.get("count")
+            }
+        };
+        Ok(count as u64)
+    }
+
+    /// Count total discovered chequebooks
+    pub async fn count_chequebooks(&self) -> Result<u64> {
+        let count: i64 = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let row = sqlx::query("SELECT COUNT(*) as count FROM payment_channel_deployments")
+                    .fetch_one(pool)
+                    .await?;
+                row.get("count")
+            }
+            DatabasePool::Postgres(pool) => {
+                let row = sqlx::query("SELECT COUNT(*) as count FROM payment_channel_deployments")
+                    .fetch_one(pool)
+                    .await?;
+                row.get("count")
+            }
+        };
+        Ok(count as u64)
     }
 }
 

@@ -758,6 +758,204 @@ sol! {
     ]"#
 }
 
+// ============================================================================
+// Payment Channel Contracts (Bandwidth Incentives)
+// ============================================================================
+
+// Payment channel factory deployment blocks
+pub const SIMPLE_SWAP_FACTORY_SEPOLIA_DEPLOYMENT_BLOCK: u64 = 4_752_810;
+#[allow(dead_code)]
+pub const SIMPLE_SWAP_FACTORY_GNOSIS_DEPLOYMENT_BLOCK: u64 = 1; // TBD - need to query
+
+// SimpleSwapFactory - Factory contract that deploys ERC20SimpleSwap instances
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    SimpleSwapFactory,
+    r#"[
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": false,
+                    "internalType": "address",
+                    "name": "contractAddress",
+                    "type": "address"
+                }
+            ],
+            "name": "SimpleSwapDeployed",
+            "type": "event"
+        },
+        {
+            "inputs": [],
+            "name": "ERC20Address",
+            "outputs": [
+                {
+                    "internalType": "address",
+                    "name": "",
+                    "type": "address"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        }
+    ]"#
+}
+
+// ERC20SimpleSwap - Chequebook contract (deployed per node)
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    ERC20SimpleSwap,
+    r#"[
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "beneficiary",
+                    "type": "address"
+                },
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "recipient",
+                    "type": "address"
+                },
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "caller",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "totalPayout",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "cumulativePayout",
+                    "type": "uint256"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "callerPayout",
+                    "type": "uint256"
+                }
+            ],
+            "name": "ChequeCashed",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [],
+            "name": "ChequeBounced",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "beneficiary",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                }
+            ],
+            "name": "HardDepositAmountChanged",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "beneficiary",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "decreaseAmount",
+                    "type": "uint256"
+                }
+            ],
+            "name": "HardDepositDecreasePrepared",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": true,
+                    "internalType": "address",
+                    "name": "beneficiary",
+                    "type": "address"
+                },
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "timeout",
+                    "type": "uint256"
+                }
+            ],
+            "name": "HardDepositTimeoutChanged",
+            "type": "event"
+        },
+        {
+            "anonymous": false,
+            "inputs": [
+                {
+                    "indexed": false,
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                }
+            ],
+            "name": "Withdraw",
+            "type": "event"
+        },
+        {
+            "inputs": [],
+            "name": "balance",
+            "outputs": [
+                {
+                    "internalType": "uint256",
+                    "name": "",
+                    "type": "uint256"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
+            "inputs": [],
+            "name": "issuer",
+            "outputs": [
+                {
+                    "internalType": "address",
+                    "name": "",
+                    "type": "address"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        }
+    ]"#
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

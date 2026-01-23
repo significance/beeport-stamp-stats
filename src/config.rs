@@ -41,6 +41,10 @@ pub struct AppConfig {
     /// Contract configurations
     pub contracts: Vec<ContractConfig>,
 
+    /// Payment channel factory configurations (optional)
+    #[serde(default)]
+    pub payment_channel_factories: Vec<PaymentChannelFactoryConfig>,
+
     /// Retry configuration
     pub retry: RetryConfig,
 }
@@ -113,6 +117,30 @@ pub struct ContractConfig {
     pub paused_at: Option<u64>,
 }
 
+/// Payment channel factory configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentChannelFactoryConfig {
+    /// Human-readable factory name (e.g., "SimpleSwapFactory-Sepolia")
+    pub name: String,
+
+    /// Factory contract address on blockchain (hex string with 0x prefix)
+    pub address: String,
+
+    /// Block number when factory was deployed
+    pub deployment_block: u64,
+
+    /// Network identifier (e.g., "gnosis", "sepolia")
+    pub network: String,
+
+    /// Whether this factory is currently active (defaults to true)
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 // Re-export RetryConfig from retry module to avoid duplication
 pub use crate::retry::RetryConfig;
 
@@ -182,6 +210,24 @@ impl Default for AppConfig {
                 chunk_size: 10000,
                 block_time_seconds: 5.0,
             },
+            payment_channel_factories: vec![
+                // Sepolia testnet factory
+                PaymentChannelFactoryConfig {
+                    name: "SimpleSwapFactory-Sepolia".to_string(),
+                    address: "0x0fF044F6bB4F684a5A149B46D7eC03ea659F98A1".to_string(),
+                    deployment_block: 4752810,
+                    network: "sepolia".to_string(),
+                    active: false, // Disabled by default (testnet)
+                },
+                // Gnosis mainnet factory
+                PaymentChannelFactoryConfig {
+                    name: "SimpleSwapFactory-Gnosis".to_string(),
+                    address: "0xc2d5a532cf69aa9a1378737d8ccdef884b6e7420".to_string(),
+                    deployment_block: 1, // TBD - need to query actual deployment block
+                    network: "gnosis".to_string(),
+                    active: false, // Disabled by default until deployment block confirmed
+                },
+            ],
             contracts: vec![
                 ContractConfig {
                     name: "PostageStamp".to_string(),
@@ -390,6 +436,45 @@ impl AppConfig {
                 return Err(format!(
                     "Deployment block for contract '{}' must be greater than 0",
                     contract.name
+                ));
+            }
+        }
+
+        // Validate payment channel factories
+        for factory in &self.payment_channel_factories {
+            // Validate factory name
+            if factory.name.is_empty() {
+                return Err("Factory name cannot be empty".to_string());
+            }
+
+            // Validate address format
+            if !factory.address.starts_with("0x") {
+                return Err(format!(
+                    "Factory address '{}' for factory '{}' must start with 0x",
+                    factory.address, factory.name
+                ));
+            }
+
+            if factory.address.len() != 42 {
+                return Err(format!(
+                    "Factory address '{}' for factory '{}' must be 42 characters (0x + 40 hex digits)",
+                    factory.address, factory.name
+                ));
+            }
+
+            // Validate deployment block
+            if factory.deployment_block == 0 {
+                return Err(format!(
+                    "Deployment block for factory '{}' must be greater than 0",
+                    factory.name
+                ));
+            }
+
+            // Validate network identifier
+            if factory.network.is_empty() {
+                return Err(format!(
+                    "Network identifier for factory '{}' cannot be empty",
+                    factory.name
                 ));
             }
         }

@@ -300,6 +300,80 @@ pub enum Commands {
     /// This will permanently delete all data in the database and recreate it.
     /// Requires confirmation before proceeding.
     Reset,
+
+    /// Discover chequebooks deployed from SimpleSwapFactory contracts
+    ///
+    /// Scans factory contracts for SimpleSwapDeployed events and stores
+    /// discovered chequebook addresses in the database for subsequent tracking.
+    DiscoverChequebooks {
+        /// Start block number (defaults to factory deployment block)
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Reprocess blocks even if they have been cached
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Specific factory to scan (defaults to all active factories)
+        #[arg(long)]
+        factory: Option<String>,
+    },
+
+    /// Sync events from discovered chequebook contracts
+    ///
+    /// Fetches all events (ChequeCashed, ChequeBounced, HardDeposit*, Withdraw)
+    /// from chequebooks discovered via the discover-chequebooks command.
+    SyncChequebooks {
+        /// Start block number (defaults to chequebook deployment block)
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Reprocess blocks even if they have been cached
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Specific chequebook address to sync (defaults to all discovered chequebooks)
+        #[arg(long)]
+        chequebook: Option<String>,
+    },
+
+    /// Analyze cheque cashing activity per chequebook
+    ///
+    /// Shows total cheques cashed and amounts per chequebook over a specified block range.
+    ChequeSummary {
+        /// Start block number
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+    },
+
+    /// Export chequebook addresses with current balances
+    ///
+    /// Retrieves all chequebook addresses and their current balances from the blockchain.
+    ChequebookBalances {
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -621,6 +695,52 @@ impl Cli {
             }
             Commands::Migrations => self.execute_migrations(cache).await,
             Commands::Reset => unreachable!("Reset command handled early"),
+            Commands::DiscoverChequebooks {
+                from_block,
+                to_block,
+                refresh,
+                factory,
+            } => {
+                self.execute_discover_chequebooks(
+                    cache,
+                    client,
+                    &config,
+                    *from_block,
+                    *to_block,
+                    *refresh,
+                    factory.clone(),
+                )
+                .await
+            }
+            Commands::SyncChequebooks {
+                from_block,
+                to_block,
+                refresh,
+                chequebook,
+            } => {
+                self.execute_sync_chequebooks(
+                    cache,
+                    client,
+                    &config,
+                    *from_block,
+                    *to_block,
+                    *refresh,
+                    chequebook.clone(),
+                )
+                .await
+            }
+            Commands::ChequeSummary {
+                from_block,
+                to_block,
+                output,
+            } => {
+                self.execute_cheque_summary(cache, *from_block, *to_block, output.clone())
+                    .await
+            }
+            Commands::ChequebookBalances { output, refresh } => {
+                self.execute_chequebook_balances(cache, client, &config, output.clone(), *refresh)
+                    .await
+            }
         }
     }
 
@@ -1223,6 +1343,496 @@ impl Cli {
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_discover_chequebooks(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        refresh: bool,
+        factory_filter: Option<String>,
+    ) -> Result<()> {
+        use crate::contracts::impls::SimpleSwapFactoryContract;
+
+        tracing::info!("Discovering chequebooks from factory contracts...");
+
+        // Filter factories by active status and optional name filter
+        let factories: Vec<_> = config
+            .payment_channel_factories
+            .iter()
+            .filter(|f| {
+                // Apply name filter if specified
+                if let Some(ref filter) = factory_filter {
+                    if !f.name.contains(filter) {
+                        return false;
+                    }
+                }
+                // Only scan active factories unless specific factory requested
+                factory_filter.is_some() || f.active
+            })
+            .collect();
+
+        if factories.is_empty() {
+            if factory_filter.is_some() {
+                return Err(anyhow::anyhow!(
+                    "No factory found matching filter '{}'",
+                    factory_filter.unwrap()
+                ));
+            } else {
+                println!("⚠️ No active payment channel factories configured.");
+                println!("   Enable factories in config.yaml or use --factory to specify one.");
+                return Ok(());
+            }
+        }
+
+        println!(
+            "📡 Scanning {} factory contract{}...\n",
+            factories.len(),
+            if factories.len() == 1 { "" } else { "s" }
+        );
+
+        let mut total_discovered = 0;
+
+        // Process each factory
+        for factory_config in factories {
+            println!("🏭 Factory: {}", factory_config.name);
+            println!("   Address: {}", factory_config.address);
+            println!("   Network: {}", factory_config.network);
+
+            // Create factory contract instance
+            let factory = SimpleSwapFactoryContract::new(
+                factory_config.address.clone(),
+                factory_config.deployment_block,
+                factory_config.name.clone(),
+            );
+
+            // Determine block range
+            let from = from_block.unwrap_or(factory_config.deployment_block);
+            let to = to_block.unwrap_or(u64::MAX);
+
+            tracing::info!(
+                "Scanning factory '{}' from block {} to {}",
+                factory_config.name,
+                from,
+                if to == u64::MAX {
+                    "latest".to_string()
+                } else {
+                    to.to_string()
+                }
+            );
+
+            // Fetch deployment events with incremental storage
+            let cache_clone = cache.clone();
+            let deployments = client
+                .fetch_factory_deployment_events(
+                    from,
+                    to,
+                    &cache,
+                    &factory,
+                    &config.blockchain,
+                    &config.retry,
+                    refresh,
+                    |chunk_deployments| {
+                        let cache = cache_clone.clone();
+                        async move {
+                            // Store deployments from this chunk immediately
+                            for deployment in &chunk_deployments {
+                                cache.store_chequebook_deployment(deployment).await?;
+                            }
+
+                            tracing::debug!(
+                                "Stored {} chequebook deployments from chunk",
+                                chunk_deployments.len()
+                            );
+
+                            Ok(())
+                        }
+                    },
+                )
+                .await?;
+
+            total_discovered += deployments.len();
+
+            if deployments.is_empty() {
+                println!("   ℹ️  No new deployments found\n");
+            } else {
+                println!(
+                    "   ✅ Discovered {} chequebook{}\n",
+                    deployments.len(),
+                    if deployments.len() == 1 { "" } else { "s" }
+                );
+
+                // Show first few discovered addresses
+                let show_count = deployments.len().min(5);
+                for deployment in deployments.iter().take(show_count) {
+                    println!("      • {}", deployment.chequebook_address);
+                }
+
+                if deployments.len() > show_count {
+                    println!("      ... and {} more", deployments.len() - show_count);
+                }
+                println!();
+            }
+        }
+
+        // Summary statistics
+        let total_stored = cache.count_chequebooks().await?;
+        println!("📊 Discovery Complete");
+        println!("   New discoveries: {total_discovered}");
+        println!("   Total in database: {total_stored}");
+
+        Ok(())
+    }
+
+    async fn execute_sync_chequebooks(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        refresh: bool,
+        chequebook_filter: Option<String>,
+    ) -> Result<()> {
+        use crate::contracts::impls::ERC20SimpleSwapContract;
+
+        tracing::info!("Syncing events from discovered chequebooks...");
+
+        // Load all discovered chequebooks from database
+        let mut chequebooks = cache.get_discovered_chequebooks().await?;
+
+        if chequebooks.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first to discover chequebook contracts.");
+            return Ok(());
+        }
+
+        // Apply chequebook filter if specified
+        if let Some(ref filter) = chequebook_filter {
+            let before = chequebooks.len();
+            chequebooks.retain(|c| c.chequebook_address.contains(filter));
+            if chequebooks.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No chequebook found matching filter '{}'",
+                    filter
+                ));
+            }
+            tracing::info!(
+                "Chequebook filter: {} -> {} chequebooks",
+                before,
+                chequebooks.len()
+            );
+        }
+
+        println!(
+            "💳 Syncing {} chequebook{}...\n",
+            chequebooks.len(),
+            if chequebooks.len() == 1 { "" } else { "s" }
+        );
+
+        let mut total_events = 0;
+
+        // Process each chequebook
+        for (idx, deployment) in chequebooks.iter().enumerate() {
+            println!(
+                "📦 [{}/{}] Chequebook: {}",
+                idx + 1,
+                chequebooks.len(),
+                &deployment.chequebook_address
+            );
+            println!("   Deployed at block: {}", deployment.deployed_at_block);
+
+            // Create chequebook contract instance
+            let chequebook = ERC20SimpleSwapContract::new(
+                deployment.chequebook_address.clone(),
+                deployment.deployed_at_block,
+            );
+
+            // Determine block range
+            let from = from_block.unwrap_or(deployment.deployed_at_block);
+            let to = to_block.unwrap_or(u64::MAX);
+
+            tracing::info!(
+                "Syncing chequebook '{}' from block {} to {}",
+                deployment.chequebook_address,
+                from,
+                if to == u64::MAX {
+                    "latest".to_string()
+                } else {
+                    to.to_string()
+                }
+            );
+
+            // Fetch events from this chequebook with incremental storage
+            let cache_clone = cache.clone();
+            let events = client
+                .fetch_chequebook_events(
+                    from,
+                    to,
+                    &cache,
+                    &chequebook,
+                    &config.blockchain,
+                    &config.retry,
+                    refresh,
+                    |chunk_events| {
+                        let cache = cache_clone.clone();
+                        async move {
+                            // Store events from this chunk immediately
+                            cache.store_payment_channel_events(&chunk_events).await?;
+
+                            tracing::debug!(
+                                "Stored {} payment channel events from chunk",
+                                chunk_events.len()
+                            );
+
+                            Ok(())
+                        }
+                    },
+                )
+                .await?;
+
+            total_events += events.len();
+
+            if events.is_empty() {
+                println!("   ℹ️  No new events found\n");
+            } else {
+                println!(
+                    "   ✅ Synced {} event{}\n",
+                    events.len(),
+                    if events.len() == 1 { "" } else { "s" }
+                );
+
+                // Show event breakdown
+                let mut event_counts = std::collections::HashMap::new();
+                for event in &events {
+                    *event_counts.entry(event.event_type.to_string()).or_insert(0) += 1;
+                }
+
+                for (event_type, count) in event_counts {
+                    println!("      • {}: {}", event_type, count);
+                }
+                println!();
+            }
+        }
+
+        // Summary statistics
+        let total_stored = cache.count_payment_channel_events().await?;
+        println!("📊 Sync Complete");
+        println!("   New events: {total_events}");
+        println!("   Total in database: {total_stored}");
+
+        Ok(())
+    }
+
+    async fn execute_cheque_summary(
+        &self,
+        cache: Cache,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        output: OutputFormat,
+    ) -> Result<()> {
+        tracing::info!("Generating cheque summary...");
+
+        // Get all chequebook deployments for address mapping
+        let deployments = cache.get_discovered_chequebooks().await?;
+        if deployments.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first.");
+            return Ok(());
+        }
+
+        // Create a map of chequebook address -> deployment info
+        let deployment_map: std::collections::HashMap<_, _> = deployments
+            .iter()
+            .map(|d| (d.chequebook_address.clone(), d))
+            .collect();
+
+        // Query for ChequeCashed events
+        let events = cache
+            .get_payment_channel_events(from_block, to_block, Some("ChequeCashed"))
+            .await?;
+
+        if events.is_empty() {
+            println!("ℹ️  No ChequeCashed events found in specified range.");
+            return Ok(());
+        }
+
+        // Aggregate by chequebook
+        #[derive(Default, tabled::Tabled)]
+        struct ChequebookStats {
+            #[tabled(rename = "Chequebook Address")]
+            address: String,
+            #[tabled(rename = "Overlay")]
+            overlay: String,
+            #[tabled(rename = "Cheques Cashed")]
+            total_cheques: u64,
+            #[tabled(rename = "Total Amount (PLUR)")]
+            total_amount: String,
+        }
+
+        let mut stats_map: std::collections::HashMap<String, (u64, Option<String>)> =
+            std::collections::HashMap::new();
+
+        for event in &events {
+            let (count, overlay) = stats_map
+                .entry(event.chequebook_address.clone())
+                .or_insert((0, None));
+            *count += 1;
+
+            // Add overlay from deployment info
+            if overlay.is_none() {
+                if let Some(deployment) = deployment_map.get(&event.chequebook_address) {
+                    *overlay = deployment.overlay_address.clone();
+                }
+            }
+        }
+
+        // Convert to sorted vec
+        let mut results: Vec<ChequebookStats> = stats_map
+            .into_iter()
+            .map(|(address, (count, overlay))| ChequebookStats {
+                address,
+                overlay: overlay.unwrap_or_else(|| "N/A".to_string()),
+                total_cheques: count,
+                total_amount: "N/A".to_string(), // Placeholder - full aggregation TODO
+            })
+            .collect();
+        results.sort_by(|a, b| b.total_cheques.cmp(&a.total_cheques));
+
+        // Output results
+        match output {
+            OutputFormat::Table => {
+                use tabled::Table;
+                let table = Table::new(&results).to_string();
+                println!("\n{table}\n");
+                println!(
+                    "Total chequebooks: {} | Total events: {}",
+                    results.len(),
+                    events.len()
+                );
+            }
+            OutputFormat::Json => {
+                let json_results: Vec<_> = results
+                    .iter()
+                    .map(|stat| {
+                        serde_json::json!({
+                            "chequebook_address": stat.address,
+                            "overlay_address": stat.overlay,
+                            "total_cheques_cashed": stat.total_cheques,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json_results)?);
+            }
+            OutputFormat::Csv => {
+                println!("chequebook_address,overlay_address,total_cheques_cashed");
+                for stat in &results {
+                    println!(
+                        "{},{},{}",
+                        stat.address, stat.overlay, stat.total_cheques
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_chequebook_balances(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        output: OutputFormat,
+        refresh: bool,
+    ) -> Result<()> {
+        tracing::info!("Retrieving chequebook balances...");
+
+        // Get all chequebook deployments
+        let deployments = cache.get_discovered_chequebooks().await?;
+        if deployments.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first.");
+            return Ok(());
+        }
+
+        println!(
+            "💳 Retrieving balances for {} chequebook{}...\n",
+            deployments.len(),
+            if deployments.len() == 1 { "" } else { "s" }
+        );
+
+        #[derive(serde::Serialize, tabled::Tabled)]
+        struct BalanceInfo {
+            #[tabled(rename = "Chequebook Address")]
+            chequebook_address: String,
+            #[tabled(rename = "Overlay")]
+            overlay_address: String,
+            #[tabled(rename = "Balance (PLUR)")]
+            balance: String,
+        }
+
+        let mut balances = Vec::new();
+
+        for deployment in &deployments {
+            let balance = if refresh {
+                // Query RPC for current balance
+                tracing::debug!("Querying balance for {}", deployment.chequebook_address);
+                match client
+                    .get_chequebook_balance(&deployment.chequebook_address, &config.retry)
+                    .await
+                {
+                    Ok(bal) => bal.to_string(),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to get balance for {}: {}",
+                            deployment.chequebook_address,
+                            e
+                        );
+                        "ERROR".to_string()
+                    }
+                }
+            } else {
+                // Use cached balance if available (placeholder for now)
+                "N/A".to_string() // TODO: Implement balance caching
+            };
+
+            balances.push(BalanceInfo {
+                chequebook_address: deployment.chequebook_address.clone(),
+                overlay_address: deployment
+                    .overlay_address
+                    .clone()
+                    .unwrap_or_else(|| "N/A".to_string()),
+                balance,
+            });
+        }
+
+        // Output results
+        match output {
+            OutputFormat::Table => {
+                use tabled::Table;
+                let table = Table::new(&balances).to_string();
+                println!("\n{table}\n");
+                println!("Total chequebooks: {}", balances.len());
+            }
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&balances)?);
+            }
+            OutputFormat::Csv => {
+                println!("chequebook_address,overlay_address,balance_plur");
+                for info in &balances {
+                    println!(
+                        "{},{},{}",
+                        info.chequebook_address, info.overlay_address, info.balance
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn execute_migrations(&self, cache: Cache) -> Result<()> {
