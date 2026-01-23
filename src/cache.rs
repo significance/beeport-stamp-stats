@@ -1732,6 +1732,80 @@ impl Cache {
         Ok(())
     }
 
+    /// Update issuer address for a chequebook
+    pub async fn update_chequebook_issuer(
+        &self,
+        chequebook_address: &str,
+        issuer_address: &str,
+    ) -> Result<()> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE payment_channel_deployments
+                    SET issuer_address = ?
+                    WHERE chequebook_address = ?
+                    "#,
+                )
+                .bind(issuer_address)
+                .bind(chequebook_address)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE payment_channel_deployments
+                    SET issuer_address = $1
+                    WHERE chequebook_address = $2
+                    "#,
+                )
+                .bind(issuer_address)
+                .bind(chequebook_address)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Update overlay address for a chequebook
+    pub async fn update_chequebook_overlay(
+        &self,
+        chequebook_address: &str,
+        overlay_address: &str,
+    ) -> Result<()> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE payment_channel_deployments
+                    SET overlay_address = ?
+                    WHERE chequebook_address = ?
+                    "#,
+                )
+                .bind(overlay_address)
+                .bind(chequebook_address)
+                .execute(pool)
+                .await?;
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    UPDATE payment_channel_deployments
+                    SET overlay_address = $1
+                    WHERE chequebook_address = $2
+                    "#,
+                )
+                .bind(overlay_address)
+                .bind(chequebook_address)
+                .execute(pool)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Store payment channel events
     pub async fn store_payment_channel_events(&self, events: &[PaymentChannelEvent]) -> Result<()> {
         for event in events {

@@ -1426,6 +1426,8 @@ impl Cli {
 
             // Fetch deployment events with incremental storage
             let cache_clone = cache.clone();
+            let client_clone = client.clone();
+            let retry_config = config.retry.clone();
             let deployments = client
                 .fetch_factory_deployment_events(
                     from,
@@ -1437,10 +1439,25 @@ impl Cli {
                     refresh,
                     |chunk_deployments| {
                         let cache = cache_clone.clone();
+                        let client = client_clone.clone();
+                        let retry = retry_config.clone();
                         async move {
                             // Store deployments from this chunk immediately
+                            // Also populate issuer address from RPC
                             for deployment in &chunk_deployments {
+                                // First store the deployment
                                 cache.store_chequebook_deployment(deployment).await?;
+
+                                // Then query and update issuer address
+                                match client.get_chequebook_issuer(&deployment.chequebook_address, &retry).await {
+                                    Ok(issuer) => {
+                                        tracing::debug!("Got issuer {} for chequebook {}", issuer, deployment.chequebook_address);
+                                        cache.update_chequebook_issuer(&deployment.chequebook_address, &issuer).await?;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Failed to get issuer for {}: {}", deployment.chequebook_address, e);
+                                    }
+                                }
                             }
 
                             tracing::debug!(
@@ -1665,6 +1682,8 @@ impl Cli {
         struct ChequebookStats {
             #[tabled(rename = "Chequebook Address")]
             address: String,
+            #[tabled(rename = "Issuer")]
+            issuer: String,
             #[tabled(rename = "Overlay")]
             overlay: String,
             #[tabled(rename = "Cheques Cashed")]
@@ -1674,13 +1693,13 @@ impl Cli {
         }
 
         use crate::events::PaymentChannelEventData;
-        let mut stats_map: std::collections::HashMap<String, (u64, u128, Option<String>)> =
+        let mut stats_map: std::collections::HashMap<String, (u64, u128, Option<String>, Option<String>)> =
             std::collections::HashMap::new();
 
         for event in &events {
-            let (count, total_amount, overlay) = stats_map
+            let (count, total_amount, issuer, overlay) = stats_map
                 .entry(event.chequebook_address.clone())
-                .or_insert((0, 0, None));
+                .or_insert((0, 0, None, None));
             *count += 1;
 
             // Parse and add total_payout from event
@@ -1690,10 +1709,15 @@ impl Cli {
                 }
             }
 
-            // Add overlay from deployment info
-            if overlay.is_none() {
+            // Add issuer and overlay from deployment info
+            if issuer.is_none() || overlay.is_none() {
                 if let Some(deployment) = deployment_map.get(&event.chequebook_address) {
-                    *overlay = deployment.overlay_address.clone();
+                    if issuer.is_none() {
+                        *issuer = deployment.issuer_address.clone();
+                    }
+                    if overlay.is_none() {
+                        *overlay = deployment.overlay_address.clone();
+                    }
                 }
             }
         }
@@ -1701,8 +1725,9 @@ impl Cli {
         // Convert to sorted vec
         let mut results: Vec<ChequebookStats> = stats_map
             .into_iter()
-            .map(|(address, (count, total, overlay))| ChequebookStats {
+            .map(|(address, (count, total, issuer, overlay))| ChequebookStats {
                 address,
+                issuer: issuer.unwrap_or_else(|| "N/A".to_string()),
                 overlay: overlay.unwrap_or_else(|| "N/A".to_string()),
                 total_cheques: count,
                 total_amount: total.to_string(),
@@ -1728,6 +1753,7 @@ impl Cli {
                     .map(|stat| {
                         serde_json::json!({
                             "chequebook_address": stat.address,
+                            "issuer_address": stat.issuer,
                             "overlay_address": stat.overlay,
                             "total_cheques_cashed": stat.total_cheques,
                             "total_amount": stat.total_amount,
@@ -1737,11 +1763,11 @@ impl Cli {
                 println!("{}", serde_json::to_string_pretty(&json_results)?);
             }
             OutputFormat::Csv => {
-                println!("chequebook_address,overlay_address,total_cheques_cashed,total_amount");
+                println!("chequebook_address,issuer_address,overlay_address,total_cheques_cashed,total_amount");
                 for stat in &results {
                     println!(
-                        "{},{},{},{}",
-                        stat.address, stat.overlay, stat.total_cheques, stat.total_amount
+                        "{},{},{},{},{}",
+                        stat.address, stat.issuer, stat.overlay, stat.total_cheques, stat.total_amount
                     );
                 }
             }
@@ -1780,6 +1806,8 @@ impl Cli {
         struct BalanceInfo {
             #[tabled(rename = "Chequebook Address")]
             chequebook_address: String,
+            #[tabled(rename = "Issuer")]
+            issuer_address: String,
             #[tabled(rename = "Overlay")]
             overlay_address: String,
             #[tabled(rename = "Balance (PLUR)")]
@@ -1808,6 +1836,10 @@ impl Cli {
 
             balances.push(BalanceInfo {
                 chequebook_address: deployment.chequebook_address.clone(),
+                issuer_address: deployment
+                    .issuer_address
+                    .clone()
+                    .unwrap_or_else(|| "N/A".to_string()),
                 overlay_address: deployment
                     .overlay_address
                     .clone()
@@ -1828,11 +1860,11 @@ impl Cli {
                 println!("{}", serde_json::to_string_pretty(&balances)?);
             }
             OutputFormat::Csv => {
-                println!("chequebook_address,overlay_address,balance_plur");
+                println!("chequebook_address,issuer_address,overlay_address,balance_plur");
                 for info in &balances {
                     println!(
-                        "{},{},{}",
-                        info.chequebook_address, info.overlay_address, info.balance
+                        "{},{},{},{}",
+                        info.chequebook_address, info.issuer_address, info.overlay_address, info.balance
                     );
                 }
             }

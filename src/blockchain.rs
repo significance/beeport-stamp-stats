@@ -1156,6 +1156,38 @@ impl BlockchainClient {
         Ok(balance)
     }
 
+    /// Get issuer address for a chequebook from the blockchain with retry logic
+    ///
+    /// Queries the ERC20SimpleSwap contract's issuer() function
+    pub async fn get_chequebook_issuer(
+        &self,
+        chequebook_address: &str,
+        retry_config: &RetryConfig,
+    ) -> Result<String> {
+        use crate::contracts::abi::ERC20SimpleSwap;
+
+        let address = Address::from_str(chequebook_address)
+            .map_err(|e| StampError::Contract(format!("Invalid chequebook address: {e}")))?;
+
+        tracing::debug!("RPC: issuer() for chequebook {}", chequebook_address);
+
+        let contract = ERC20SimpleSwap::new(address, &self.provider);
+
+        // Use retry policy for rate limit handling
+        let issuer = retry_config
+            .execute(|| async {
+                contract
+                    .issuer()
+                    .call()
+                    .await
+                    .map(|i| format!("{:?}", i._0))
+            })
+            .await
+            .map_err(StampError::Rpc)?;
+
+        Ok(issuer)
+    }
+
     /// Get remaining balance for a batch from the blockchain with retry logic
     ///
     /// Uses the first contract from the registry that supports balance queries
