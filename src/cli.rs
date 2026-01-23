@@ -1673,14 +1673,22 @@ impl Cli {
             total_amount: String,
         }
 
-        let mut stats_map: std::collections::HashMap<String, (u64, Option<String>)> =
+        use crate::events::PaymentChannelEventData;
+        let mut stats_map: std::collections::HashMap<String, (u64, u128, Option<String>)> =
             std::collections::HashMap::new();
 
         for event in &events {
-            let (count, overlay) = stats_map
+            let (count, total_amount, overlay) = stats_map
                 .entry(event.chequebook_address.clone())
-                .or_insert((0, None));
+                .or_insert((0, 0, None));
             *count += 1;
+
+            // Parse and add total_payout from event
+            if let PaymentChannelEventData::ChequeCashed { total_payout, .. } = &event.data {
+                if let Ok(amount) = total_payout.parse::<u128>() {
+                    *total_amount += amount;
+                }
+            }
 
             // Add overlay from deployment info
             if overlay.is_none() {
@@ -1693,11 +1701,11 @@ impl Cli {
         // Convert to sorted vec
         let mut results: Vec<ChequebookStats> = stats_map
             .into_iter()
-            .map(|(address, (count, overlay))| ChequebookStats {
+            .map(|(address, (count, total, overlay))| ChequebookStats {
                 address,
                 overlay: overlay.unwrap_or_else(|| "N/A".to_string()),
                 total_cheques: count,
-                total_amount: "N/A".to_string(), // Placeholder - full aggregation TODO
+                total_amount: total.to_string(),
             })
             .collect();
         results.sort_by(|a, b| b.total_cheques.cmp(&a.total_cheques));
@@ -1722,17 +1730,18 @@ impl Cli {
                             "chequebook_address": stat.address,
                             "overlay_address": stat.overlay,
                             "total_cheques_cashed": stat.total_cheques,
+                            "total_amount": stat.total_amount,
                         })
                     })
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&json_results)?);
             }
             OutputFormat::Csv => {
-                println!("chequebook_address,overlay_address,total_cheques_cashed");
+                println!("chequebook_address,overlay_address,total_cheques_cashed,total_amount");
                 for stat in &results {
                     println!(
-                        "{},{},{}",
-                        stat.address, stat.overlay, stat.total_cheques
+                        "{},{},{},{}",
+                        stat.address, stat.overlay, stat.total_cheques, stat.total_amount
                     );
                 }
             }
@@ -1759,11 +1768,13 @@ impl Cli {
             return Ok(());
         }
 
-        println!(
-            "💳 Retrieving balances for {} chequebook{}...\n",
-            deployments.len(),
-            if deployments.len() == 1 { "" } else { "s" }
-        );
+        if matches!(output, OutputFormat::Table) {
+            println!(
+                "💳 Retrieving balances for {} chequebook{}...\n",
+                deployments.len(),
+                if deployments.len() == 1 { "" } else { "s" }
+            );
+        }
 
         #[derive(serde::Serialize, tabled::Tabled)]
         struct BalanceInfo {
@@ -1778,26 +1789,21 @@ impl Cli {
         let mut balances = Vec::new();
 
         for deployment in &deployments {
-            let balance = if refresh {
-                // Query RPC for current balance
-                tracing::debug!("Querying balance for {}", deployment.chequebook_address);
-                match client
-                    .get_chequebook_balance(&deployment.chequebook_address, &config.retry)
-                    .await
-                {
-                    Ok(bal) => bal.to_string(),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to get balance for {}: {}",
-                            deployment.chequebook_address,
-                            e
-                        );
-                        "ERROR".to_string()
-                    }
+            // Always query RPC for balance (refresh flag can be used for future caching)
+            tracing::debug!("Querying balance for {}", deployment.chequebook_address);
+            let balance = match client
+                .get_chequebook_balance(&deployment.chequebook_address, &config.retry)
+                .await
+            {
+                Ok(bal) => bal.to_string(),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to get balance for {}: {}",
+                        deployment.chequebook_address,
+                        e
+                    );
+                    "ERROR".to_string()
                 }
-            } else {
-                // Use cached balance if available (placeholder for now)
-                "N/A".to_string() // TODO: Implement balance caching
             };
 
             balances.push(BalanceInfo {

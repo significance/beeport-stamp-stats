@@ -1134,29 +1134,26 @@ impl BlockchainClient {
     ) -> Result<u128> {
         use crate::contracts::abi::ERC20SimpleSwap;
 
-        let _address = Address::from_str(chequebook_address)
+        let address = Address::from_str(chequebook_address)
             .map_err(|e| StampError::Contract(format!("Invalid chequebook address: {e}")))?;
 
         tracing::debug!("RPC: balance() for chequebook {}", chequebook_address);
 
-        let provider = &self.provider;
-        let chequebook_address_clone = chequebook_address.to_string();
+        let contract = ERC20SimpleSwap::new(address, &self.provider);
+
+        // Use retry policy for rate limit handling
         let balance = retry_config
             .execute(|| async {
-                let contract = ERC20SimpleSwap::new(
-                    Address::from_str(&chequebook_address_clone).unwrap(),
-                    provider,
-                );
                 contract
                     .balance()
                     .call()
                     .await
-                    .map_err(|e| std::io::Error::other(format!("Failed to get balance: {e}")))
+                    .map(|b| b._0.to::<u128>())
             })
             .await
             .map_err(StampError::Rpc)?;
 
-        Ok(balance._0.to::<u128>())
+        Ok(balance)
     }
 
     /// Get remaining balance for a batch from the blockchain with retry logic
