@@ -2146,6 +2146,118 @@ impl Cache {
         Ok(events)
     }
 
+    /// Get payment channel events for the last N months (0 for all time)
+    pub async fn get_payment_channel_events_recent(
+        &self,
+        months: u32,
+    ) -> Result<Vec<PaymentChannelEvent>> {
+        use crate::events::{PaymentChannelEventData, PaymentChannelEventType};
+
+        let cutoff = if months == 0 {
+            0
+        } else {
+            let cutoff_date = Utc::now() - Duration::days((months * 30) as i64);
+            cutoff_date.timestamp()
+        };
+
+        let events = match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let rows = sqlx::query(
+                    r#"
+                    SELECT event_type, chequebook_address, block_number, block_timestamp,
+                           transaction_hash, log_index, data
+                    FROM payment_channel_events
+                    WHERE block_timestamp >= ?
+                    ORDER BY block_number ASC, log_index ASC
+                    "#,
+                )
+                .bind(cutoff)
+                .fetch_all(pool)
+                .await?;
+
+                let mut events = Vec::new();
+                for row in rows {
+                    let event_type_str: String = row.get("event_type");
+                    let event_type = match event_type_str.as_str() {
+                        "ChequeCashed" => PaymentChannelEventType::ChequeCashed,
+                        "ChequeBounced" => PaymentChannelEventType::ChequeBounced,
+                        "HardDepositAmountChanged" => PaymentChannelEventType::HardDepositAmountChanged,
+                        "HardDepositDecreasePrepared" => PaymentChannelEventType::HardDepositDecreasePrepared,
+                        "HardDepositTimeoutChanged" => PaymentChannelEventType::HardDepositTimeoutChanged,
+                        "Withdraw" => PaymentChannelEventType::Withdraw,
+                        _ => continue,
+                    };
+
+                    let data_str: String = row.get("data");
+                    let data: PaymentChannelEventData = serde_json::from_str(&data_str)?;
+
+                    let timestamp: i64 = row.get("block_timestamp");
+                    let block_timestamp =
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+
+                    events.push(PaymentChannelEvent {
+                        event_type,
+                        chequebook_address: row.get("chequebook_address"),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp,
+                        transaction_hash: row.get("transaction_hash"),
+                        log_index: row.get::<i64, _>("log_index") as u64,
+                        data,
+                    });
+                }
+                events
+            }
+            DatabasePool::Postgres(pool) => {
+                let rows = sqlx::query(
+                    r#"
+                    SELECT event_type, chequebook_address, block_number, block_timestamp,
+                           transaction_hash, log_index, data
+                    FROM payment_channel_events
+                    WHERE block_timestamp >= $1
+                    ORDER BY block_number ASC, log_index ASC
+                    "#,
+                )
+                .bind(cutoff)
+                .fetch_all(pool)
+                .await?;
+
+                let mut events = Vec::new();
+                for row in rows {
+                    let event_type_str: String = row.get("event_type");
+                    let event_type = match event_type_str.as_str() {
+                        "ChequeCashed" => PaymentChannelEventType::ChequeCashed,
+                        "ChequeBounced" => PaymentChannelEventType::ChequeBounced,
+                        "HardDepositAmountChanged" => PaymentChannelEventType::HardDepositAmountChanged,
+                        "HardDepositDecreasePrepared" => PaymentChannelEventType::HardDepositDecreasePrepared,
+                        "HardDepositTimeoutChanged" => PaymentChannelEventType::HardDepositTimeoutChanged,
+                        "Withdraw" => PaymentChannelEventType::Withdraw,
+                        _ => continue,
+                    };
+
+                    let data_json: serde_json::Value = row.get("data");
+                    let data: PaymentChannelEventData = serde_json::from_value(data_json)?;
+
+                    let timestamp: i64 = row.get("block_timestamp");
+                    let block_timestamp =
+                        DateTime::from_timestamp(timestamp, 0).unwrap_or_else(Utc::now);
+
+                    events.push(PaymentChannelEvent {
+                        event_type,
+                        chequebook_address: row.get("chequebook_address"),
+                        block_number: row.get::<i64, _>("block_number") as u64,
+                        block_timestamp,
+                        transaction_hash: row.get("transaction_hash"),
+                        log_index: row.get::<i64, _>("log_index") as u64,
+                        data,
+                    });
+                }
+                events
+            }
+        };
+
+        Ok(events)
+    }
+
     /// Get last scanned block for factory (used for incremental discovery)
     pub async fn get_last_factory_scan_block(&self, factory_address: &str) -> Result<Option<u64>> {
         let max_block: Option<i64> = match &self.pool {

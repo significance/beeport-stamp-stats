@@ -374,6 +374,19 @@ pub enum Commands {
         #[arg(long, default_value = "false")]
         refresh: bool,
     },
+
+    /// Display payment channel activity summary grouped by time period
+    ///
+    /// Shows cheque cashing activity statistics grouped by day/week/month.
+    PaymentChannelSummary {
+        /// Group statistics by time period
+        #[arg(long, default_value = "week")]
+        group_by: GroupBy,
+
+        /// Number of months to look back (0 for all time)
+        #[arg(long, default_value = "12")]
+        months: u32,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -739,6 +752,10 @@ impl Cli {
             }
             Commands::ChequebookBalances { output, refresh } => {
                 self.execute_chequebook_balances(cache, client, &config, output.clone(), *refresh)
+                    .await
+            }
+            Commands::PaymentChannelSummary { group_by, months } => {
+                self.execute_payment_channel_summary(cache, group_by.clone(), *months)
                     .await
             }
         }
@@ -1853,6 +1870,163 @@ impl Cli {
                     );
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_payment_channel_summary(
+        &self,
+        cache: Cache,
+        group_by: GroupBy,
+        months: u32,
+    ) -> Result<()> {
+        use crate::events::{PaymentChannelEventData, PaymentChannelEventType};
+        use chrono::{DateTime, Datelike, Utc};
+
+        tracing::info!("Generating payment channel summary...");
+
+        // Get all payment channel events
+        let events = cache.get_payment_channel_events_recent(months).await?;
+
+        if events.is_empty() {
+            println!("\nNo payment channel events found in cache.\n");
+            return Ok(());
+        }
+
+        println!("\n## Payment Channel Activity Summary\n");
+
+        // Overall statistics
+        println!("### Overall Statistics\n");
+
+        let total_events = events.len();
+        let cheque_cashed = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::ChequeCashed)).count();
+        let cheque_bounced = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::ChequeBounced)).count();
+        let hard_deposit = events.iter().filter(|e| matches!(
+            e.event_type,
+            PaymentChannelEventType::HardDepositAmountChanged
+                | PaymentChannelEventType::HardDepositDecreasePrepared
+                | PaymentChannelEventType::HardDepositTimeoutChanged
+        )).count();
+        let withdrawals = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::Withdraw)).count();
+
+        // Calculate total value transferred
+        let total_transferred: u128 = events
+            .iter()
+            .filter_map(|e| match &e.data {
+                PaymentChannelEventData::ChequeCashed { total_payout, .. } => {
+                    total_payout.parse::<u128>().ok()
+                }
+                _ => None,
+            })
+            .sum();
+
+        // Count unique chequebooks
+        let unique_chequebooks: std::collections::HashSet<_> =
+            events.iter().map(|e| &e.chequebook_address).collect();
+
+        println!("- **Total Events:** {}", total_events);
+        println!("- **Cheques Cashed:** {}", cheque_cashed);
+        println!("- **Cheques Bounced:** {}", cheque_bounced);
+        println!("- **Hard Deposit Events:** {}", hard_deposit);
+        println!("- **Withdrawals:** {}", withdrawals);
+        println!("- **Total Value Transferred:** {} PLUR", total_transferred);
+        println!("- **Unique Chequebooks:** {}\n", unique_chequebooks.len());
+
+        // Time range
+        if let (Some(first), Some(last)) = (events.first(), events.last()) {
+            println!("### Time Range\n");
+            println!("- **From:** {}", first.block_timestamp.format("%Y-%m-%d %H:%M"));
+            println!("- **To:** {}", last.block_timestamp.format("%Y-%m-%d %H:%M"));
+            println!(
+                "- **Duration:** {} days\n",
+                (last.block_timestamp - first.block_timestamp).num_days()
+            );
+        }
+
+        // Group by time period
+        #[derive(Default)]
+        struct PeriodStats {
+            period_label: String,
+            cheque_cashed_count: usize,
+            total_transferred: u128,
+            unique_chequebooks: std::collections::HashSet<String>,
+            total_events: usize,
+        }
+
+        let mut period_map: std::collections::HashMap<String, PeriodStats> =
+            std::collections::HashMap::new();
+
+        for event in &events {
+            let period_key = match group_by {
+                GroupBy::Day => event.block_timestamp.format("%Y-%m-%d").to_string(),
+                GroupBy::Week => {
+                    let iso_week = event.block_timestamp.iso_week();
+                    format!("{}-W{:02}", iso_week.year(), iso_week.week())
+                }
+                GroupBy::Month => event.block_timestamp.format("%Y-%m").to_string(),
+            };
+
+            let stats = period_map.entry(period_key.clone()).or_insert_with(|| PeriodStats {
+                period_label: period_key,
+                ..Default::default()
+            });
+
+            stats.total_events += 1;
+            stats.unique_chequebooks.insert(event.chequebook_address.clone());
+
+            if matches!(event.event_type, PaymentChannelEventType::ChequeCashed) {
+                stats.cheque_cashed_count += 1;
+                if let PaymentChannelEventData::ChequeCashed { total_payout, .. } = &event.data {
+                    if let Ok(amount) = total_payout.parse::<u128>() {
+                        stats.total_transferred += amount;
+                    }
+                }
+            }
+        }
+
+        // Sort periods chronologically
+        let mut periods: Vec<_> = period_map.into_values().collect();
+        periods.sort_by(|a, b| a.period_label.cmp(&b.period_label));
+
+        println!("### Activity by {:?}\n", group_by);
+
+        #[derive(tabled::Tabled)]
+        struct PeriodRow {
+            #[tabled(rename = "Period")]
+            period: String,
+            #[tabled(rename = "Cheques Cashed")]
+            cheques: usize,
+            #[tabled(rename = "Value Transferred (PLUR)")]
+            value: String,
+            #[tabled(rename = "Total Events")]
+            total: usize,
+            #[tabled(rename = "Unique Chequebooks")]
+            unique: usize,
+        }
+
+        let rows: Vec<PeriodRow> = periods
+            .iter()
+            .map(|stats| PeriodRow {
+                period: stats.period_label.clone(),
+                cheques: stats.cheque_cashed_count,
+                value: stats.total_transferred.to_string(),
+                total: stats.total_events,
+                unique: stats.unique_chequebooks.len(),
+            })
+            .collect();
+
+        use tabled::Table;
+        let table = Table::new(rows).to_string();
+        println!("{table}\n");
+
+        // Most active period
+        if let Some(most_active) = periods.iter().max_by_key(|s| s.total_events) {
+            println!("### Most Active Period\n");
+            println!(
+                "**{}** with {} events and {} PLUR transferred\n",
+                most_active.period_label, most_active.total_events, most_active.total_transferred
+            );
         }
 
         Ok(())
