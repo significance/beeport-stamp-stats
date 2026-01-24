@@ -1,0 +1,19 @@
+database:
+  path: "postgresql://localhost/beeport_bandwidth"
+
+rpc:
+  url: "http://localhost:8545"
+
+payment_channel_factories:
+  - name: "SimpleSwapFactory-Gnosis"
+    address: "0xc2d5a532cf69aa9a1378737d8ccdef884b6e7420"
+    deployment_block: 20000000
+    network: "gnosis"
+    active: true
+
+contracts:
+  - name: "PostageStamp"
+    contract_type: "PostageStamp"
+    address: "0x45a1502382541Cd610CC9068e88727426b696293"
+    deployment_block: 31305656
+    active: false
