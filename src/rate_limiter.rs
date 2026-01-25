@@ -63,7 +63,6 @@ struct RateLimitState {
 /// Rate limiting strategy
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 enum RateLimitStrategy {
     /// Manual: User-specified, never changes
     Manual,
@@ -402,7 +401,6 @@ impl AdaptiveRateLimiter {
 /// Rate limit statistics
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct RateLimitStats {
     pub rpc_url: String,
     pub configured_limit: Option<f64>,

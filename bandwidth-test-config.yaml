@@ -1,5 +1,5 @@
 database:
-  path: "postgresql://localhost/beeport_bandwidth"
+  path: "postgresql://localhost/beeport_bandwidth_testing"
 
 rpc:
   url: "http://localhost:8545"

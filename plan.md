@@ -1,16 +1,31 @@
 # Beeport TX Stats - Project Plan
 
-**Last Updated:** 2026-01-25
+**Last Updated:** 2026-01-25 20:41 UTC (comprehensive testing completed)
 
 ---
 
 ## 📍 Current Status
 
-**Branch:** `feat/improve-retrieval-efficiency`
+**Branch:** `feat/improve-retrieval-efficiency-with-bandwidth`
 **Goal:** Improve retrieval efficiency for postage batch data collection
-**Database:** `beeport3m` (PostgreSQL, configured in config.yaml)
+**Database:** `beeport_bandwidth_testing` (PostgreSQL, for testing)
 
-**Project State:** 🚧 Token Bucket Rate Limiter Implemented - Testing
+**Project State:** ✅ Comprehensive Testing Complete
+
+**Testing Session (2026-01-25 20:41 UTC):**
+- ✅ 86 unit tests passing
+- ✅ Zero clippy warnings
+- ✅ Fixed 3 failing tests (config defaults, constant values, fractional rate test)
+- ✅ Fixed `u64::MAX` overflow bug in SQL queries (caused empty results)
+- ✅ Fixed duplicate `#[allow(dead_code)]` attributes in rate_limiter.rs
+- ✅ Payment channel commands tested and working
+- ✅ Parallel chequebook syncing operational
+
+**Bug Fixes This Session:**
+- Fixed `unwrap_or(u64::MAX)` to `unwrap_or(i64::MAX as u64)` - prevents SQL query failures due to i64 overflow
+- Fixed test constants to match actual deployment block values
+- Fixed fractional rate test (capacity was 2.0, should be 1.0)
+- Removed duplicate `#[allow(dead_code)]` attributes
 
 **Recent Work:** Implemented token bucket rate limiter with automatic recovery (2026-01-25)
 - ✅ New `rate_limiter_v2.rs` with token bucket algorithm
@@ -18,7 +33,7 @@
 - ✅ Cached rate limits persist to database (`rpc_rate_limits` table)
 - ✅ Background recovery tasks for gradual rate increase
 - ✅ Fixed PostgreSQL migration to use DOUBLE PRECISION (f64 compatible)
-- 🚧 Needs production testing with long-running fetch operations
+- ✅ Tested with local RPC and parallel chequebook syncing
 
 **Previous Work:** Parallel RPC execution (2026-01-19)
 - ✅ Identified problem: execute_many() existed but was never used
@@ -258,27 +273,50 @@ WHERE event_type = 'BatchCreated'
 
 ## 📚 Testing Strategy
 
-### Database Convention
-**IMPORTANT:** Always use PostgreSQL database `beeport1m`
+### Bandwidth Testing Configuration
 
-- **Database name:** `beeport1m` (ONLY database to use)
+**Use `bandwidth-test-config.yaml` for all bandwidth-related testing:**
+
+```bash
+# Run commands with bandwidth test config
+./target/release/beeport-stamp-stats --config bandwidth-test-config.yaml <command>
+
+# Example: Sync chequebooks
+./target/release/beeport-stamp-stats --config bandwidth-test-config.yaml sync-chequebooks
+```
+
+**Config Details:**
+- **Database:** `postgresql://localhost/beeport_bandwidth`
+- **Payment Channel Factory:** SimpleSwapFactory-Gnosis at `0xc2d5a532cf69aa9a1378737d8ccdef884b6e7420`
+- **RPC:** `http://localhost:8545` (use local node or update for testing)
+
+**When to use:**
+- Testing payment channel / chequebook syncing
+- Testing multi-RPC bandwidth optimizations
+- Testing rate limiter behavior under load
+- Any work on the `feat/improve-retrieval-efficiency-with-bandwidth` branch
+
+### Database Convention
+**IMPORTANT:** Always use PostgreSQL database `beeport_bandwidth_testing`
+
+- **Database name:** `beeport_bandwidth_testing` (ONLY database to use)
 - **Never delete:** Always ASK user for confirmation before any DROP DATABASE operations
 - **Backup first:** If user confirms deletion, suggest backing up first
 
 **User Confirmation Required Before:**
 1. **ANY DROP DATABASE operation** - ALWAYS ask first, suggest backup
-2. Deleting or truncating data from `beeport1m`
+2. Deleting or truncating data from `beeport_bandwidth_testing`
 3. Any destructive operations on the database
 
 **Standard usage:**
 ```bash
-# Normal operation - always use beeport1m
+# Normal operation - always use beeport_bandwidth_testing
 ./target/release/beeport-stamp-stats fetch
 ./target/release/beeport-stamp-stats sync
 
 # Database is configured in config.yaml:
 database:
-  path: "postgresql://localhost/beeport1m"
+  path: "postgresql://localhost/beeport_bandwidth_testing"
 ```
 
 ### Verification Checklist

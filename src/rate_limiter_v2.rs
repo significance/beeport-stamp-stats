@@ -512,7 +512,7 @@ mod tests {
         let config = RecoveryConfig::default();
         let mut bucket = TokenBucket::new(
             0.5, // 0.5 req/s = 1 request every 2 seconds
-            2.0,
+            1.0, // capacity of 1 - only one token available initially
             0.1,
             50.0,
             1.1,
@@ -523,10 +523,10 @@ mod tests {
             None,
         );
 
-        // First request should succeed immediately
+        // First request should succeed immediately (consumes the 1 initial token)
         bucket.acquire().await.unwrap();
 
-        // Second request should wait ~2 seconds
+        // Second request should wait ~2 seconds (need to refill at 0.5 req/s)
         let start = Instant::now();
         bucket.acquire().await.unwrap();
         let elapsed = start.elapsed();

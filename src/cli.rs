@@ -1235,7 +1235,7 @@ impl Cli {
             })
             .unwrap_or(DEFAULT_START_BLOCK);
 
-        let to = to_block.unwrap_or(u64::MAX);
+        let to = to_block.unwrap_or(i64::MAX as u64);
 
         tracing::info!(
             "Syncing from block {} to {}",
@@ -1474,7 +1474,7 @@ impl Cli {
 
             // Determine block range
             let from = from_block.unwrap_or(factory_config.deployment_block);
-            let to = to_block.unwrap_or(u64::MAX);
+            let to = to_block.unwrap_or(i64::MAX as u64);
 
             tracing::info!(
                 "Scanning factory '{}' from block {} to {}",
@@ -1658,7 +1658,7 @@ impl Cli {
                         );
 
                         let from = from_block.unwrap_or(deployment.deployed_at_block);
-                        let to = to_block.unwrap_or(u64::MAX);
+                        let to = to_block.unwrap_or(i64::MAX as u64);
 
                         tracing::debug!(
                             "Syncing chequebook '{}' from block {} to {}",

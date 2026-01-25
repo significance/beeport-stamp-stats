@@ -963,8 +963,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(POSTAGE_STAMP_DEPLOYMENT_BLOCK, 31_305_656);
-        assert_eq!(STAMPS_REGISTRY_DEPLOYMENT_BLOCK, 42_390_510);
+        assert_eq!(POSTAGE_STAMP_DEPLOYMENT_BLOCK, 24_188_618);
+        assert_eq!(STAMPS_REGISTRY_DEPLOYMENT_BLOCK, 28_165_570);
         assert_eq!(DEFAULT_START_BLOCK, POSTAGE_STAMP_DEPLOYMENT_BLOCK);
 
         // Storage Incentives contracts

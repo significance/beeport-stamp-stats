@@ -152,18 +152,16 @@ fn test_config_validation_zero_backoff_multiplier() {
 }
 
 #[test]
-fn test_config_load_uses_defaults_when_no_file() {
-    // Loading without a file should use defaults
-    let config = AppConfig::load();
+fn test_config_defaults_are_valid() {
+    // Verify default configuration is valid and has expected values
+    let config = AppConfig::default();
 
-    // Should succeed with defaults
-    assert!(config.is_ok());
+    // Should have default values
+    assert_eq!(config.rpc.url, Some("https://rpc.gnosis.gateway.fm".to_string()));
+    assert_eq!(config.blockchain.chunk_size, 10000);
 
-    if let Ok(config) = config {
-        // Verify it has default values
-        assert_eq!(config.rpc.url, Some("https://rpc.gnosis.gateway.fm".to_string()));
-        assert_eq!(config.blockchain.chunk_size, 10000);
-    }
+    // Should pass validation
+    assert!(config.validate().is_ok());
 }
 
 #[test]

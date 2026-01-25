@@ -2004,7 +2004,8 @@ impl Cache {
         use crate::events::{PaymentChannelEventData, PaymentChannelEventType};
 
         let from = from_block.unwrap_or(0);
-        let to = to_block.unwrap_or(u64::MAX);
+        // Use i64::MAX to avoid overflow when casting to i64 for SQL binding
+        let to = to_block.unwrap_or(i64::MAX as u64);
 
         let events = match &self.pool {
             DatabasePool::Sqlite(pool) => {
