@@ -22,7 +22,9 @@ pub mod parser;
 
 use crate::config::AppConfig;
 use crate::error::Result;
-use crate::events::{StampEvent, StorageIncentivesEvent};
+use crate::events::{
+    ChequebookDeployment, PaymentChannelEvent, StampEvent, StorageIncentivesEvent,
+};
 use alloy::primitives::TxHash;
 use alloy::rpc::types::Log;
 use chrono::{DateTime, Utc};
@@ -130,6 +132,71 @@ pub trait StorageIncentivesContract: Send + Sync {
         transaction_hash: TxHash,
         log_index: u64,
     ) -> Result<Option<StorageIncentivesEvent>>;
+}
+
+// ============================================================================
+// Payment Channel Contracts (Bandwidth Incentives)
+// ============================================================================
+
+/// Trait defining payment channel factory behavior
+///
+/// Factory contracts (SimpleSwapFactory) deploy individual chequebook contracts.
+/// This trait handles parsing factory deployment events.
+pub trait PaymentChannelFactory: Send + Sync {
+    /// Factory name (e.g., "SimpleSwapFactory-Sepolia")
+    fn name(&self) -> &str;
+
+    /// Factory address on blockchain (hex string with 0x prefix)
+    fn address(&self) -> &str;
+
+    /// Block number when factory was deployed
+    fn deployment_block(&self) -> u64;
+
+    /// Parse a factory deployment event (SimpleSwapDeployed)
+    ///
+    /// Returns ChequebookDeployment info if the log is a deployment event.
+    fn parse_deployment_event(
+        &self,
+        log: Log,
+        block_number: u64,
+        block_timestamp: DateTime<Utc>,
+        transaction_hash: TxHash,
+    ) -> Result<Option<ChequebookDeployment>>;
+}
+
+/// Trait defining payment channel contract behavior
+///
+/// Payment channel contracts (ERC20SimpleSwap chequebooks) emit events related
+/// to cheque cashing, hard deposits, and withdrawals.
+///
+/// This trait is similar to Contract but returns PaymentChannelEvent.
+#[allow(dead_code)]
+pub trait PaymentChannelContract: Send + Sync {
+    /// Contract name (chequebook address)
+    fn name(&self) -> &str;
+
+    /// Contract address on blockchain (hex string with 0x prefix)
+    fn address(&self) -> &str;
+
+    /// Block number when contract was deployed
+    fn deployment_block(&self) -> u64;
+
+    /// Parse a raw log into a PaymentChannelEvent
+    fn parse_log(
+        &self,
+        log: Log,
+        block_number: u64,
+        block_timestamp: DateTime<Utc>,
+        transaction_hash: TxHash,
+        log_index: u64,
+    ) -> Result<Option<PaymentChannelEvent>>;
+
+    /// Whether this contract supports balance queries
+    ///
+    /// Default: true (all chequebooks support balance())
+    fn supports_balance_query(&self) -> bool {
+        true
+    }
 }
 
 /// Registry to manage all active contracts

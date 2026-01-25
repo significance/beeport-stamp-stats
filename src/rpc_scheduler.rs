@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 /// RPC endpoint with provider and rate limiter
+#[allow(dead_code)]
 struct RpcEndpoint {
     url: String,
     provider: RootProvider<Http<Client>>,
@@ -26,6 +27,7 @@ struct RpcEndpoint {
 
 /// RPC scheduler for distributing requests across multiple endpoints
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct RpcScheduler {
     endpoints: Arc<Vec<RpcEndpoint>>,
     next_endpoint_index: Arc<AtomicUsize>,
@@ -153,11 +155,13 @@ impl RpcScheduler {
     }
 
     /// Get all providers
+    #[allow(dead_code)]
     pub fn providers(&self) -> Vec<&RootProvider<Http<Client>>> {
         self.endpoints.iter().map(|e| &e.provider).collect()
     }
 
     /// Get statistics for all endpoints
+    #[allow(dead_code)]
     pub async fn get_all_stats(&self) -> Vec<crate::rate_limiter::RateLimitStats> {
         let mut stats = Vec::new();
         for endpoint in self.endpoints.iter() {

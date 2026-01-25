@@ -57,6 +57,7 @@ struct RateLimitState {
 
 /// Rate limiting strategy
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum RateLimitStrategy {
     /// Manual: User-specified, never changes
     Manual,
@@ -333,6 +334,7 @@ impl AdaptiveRateLimiter {
     }
 
     /// Get current rate limit
+    #[allow(dead_code)]
     pub async fn current_limit(&self) -> f64 {
         self.config.read().await.current_limit
     }
@@ -392,6 +394,7 @@ impl AdaptiveRateLimiter {
 
 /// Rate limit statistics
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct RateLimitStats {
     pub rpc_url: String,
     pub configured_limit: Option<f64>,

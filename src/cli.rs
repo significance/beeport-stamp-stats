@@ -12,9 +12,8 @@ use crate::{
     events::EventType,
     export,
     hooks::{EventHook, StubHook},
+    rpc_scheduler::RpcScheduler,
 };
-
-use crate::rpc_scheduler::RpcScheduler;
 
 /// Beeport Postage Stamp Statistics Tool
 ///
@@ -266,6 +265,30 @@ pub enum Commands {
         /// Show only addresses where owner != from_address
         #[arg(long, default_value = "false")]
         show_delegated_only: bool,
+
+        /// Filter by role (owner, sender, or owner-and-sender)
+        #[arg(long)]
+        role: Option<RoleFilter>,
+
+        /// Show only addresses with live (non-expired) stamps
+        #[arg(long, default_value = "false")]
+        live_only: bool,
+
+        /// Override current storage price for TTL calculations (PLUR per chunk per block)
+        #[arg(long)]
+        price: Option<String>,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Maximum number of retries for rate-limited requests
+        #[arg(long, default_value = "20")]
+        max_retries: u32,
+
+        /// Cache validity in blocks (default: 518400 blocks = ~1 month at 5s/block)
+        #[arg(long, default_value = "518400")]
+        cache_validity_blocks: u64,
     },
 
     /// Show database migration status
@@ -278,6 +301,97 @@ pub enum Commands {
     /// This will permanently delete all data in the database and recreate it.
     /// Requires confirmation before proceeding.
     Reset,
+
+    /// Discover chequebooks deployed from SimpleSwapFactory contracts
+    ///
+    /// Scans factory contracts for SimpleSwapDeployed events and stores
+    /// discovered chequebook addresses in the database for subsequent tracking.
+    DiscoverChequebooks {
+        /// Start block number (defaults to factory deployment block)
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Reprocess blocks even if they have been cached
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Specific factory to scan (defaults to all active factories)
+        #[arg(long)]
+        factory: Option<String>,
+    },
+
+    /// Sync events from discovered chequebook contracts
+    ///
+    /// Fetches all events (ChequeCashed, ChequeBounced, HardDeposit*, Withdraw)
+    /// from chequebooks discovered via the discover-chequebooks command.
+    SyncChequebooks {
+        /// Start block number (defaults to chequebook deployment block)
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Reprocess blocks even if they have been cached
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+
+        /// Specific chequebook address to sync (defaults to all discovered chequebooks)
+        #[arg(long)]
+        chequebook: Option<String>,
+
+        /// Number of chequebooks to process in parallel (default: 10)
+        #[arg(long, default_value = "10")]
+        parallel_batch_size: usize,
+    },
+
+    /// Analyze cheque cashing activity per chequebook
+    ///
+    /// Shows total cheques cashed and amounts per chequebook over a specified block range.
+    ChequeSummary {
+        /// Start block number
+        #[arg(long)]
+        from_block: Option<u64>,
+
+        /// End block number (defaults to latest)
+        #[arg(long)]
+        to_block: Option<u64>,
+
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+    },
+
+    /// Export chequebook addresses with current balances
+    ///
+    /// Retrieves all chequebook addresses and their current balances from the blockchain.
+    ChequebookBalances {
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Refresh balance data from blockchain (otherwise uses cache if available)
+        #[arg(long, default_value = "false")]
+        refresh: bool,
+    },
+
+    /// Display payment channel activity summary grouped by time period
+    ///
+    /// Shows cheque cashing activity statistics grouped by day/week/month.
+    PaymentChannelSummary {
+        /// Group statistics by time period
+        #[arg(long, default_value = "week")]
+        group_by: GroupBy,
+
+        /// Number of months to look back (0 for all time)
+        #[arg(long, default_value = "12")]
+        months: u32,
+    },
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -368,6 +482,13 @@ pub enum ExpiryAnalyticsSortBy {
     Storage,
 }
 
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum RoleFilter {
+    Owner,
+    Sender,
+    OwnerAndSender,
+}
+
 impl From<ExportFormat> for export::ExportFormat {
     fn from(format: ExportFormat) -> Self {
         match format {
@@ -391,7 +512,7 @@ impl Cli {
 
         // Apply CLI overrides
         if let Some(rpc_url) = &self.rpc_url {
-            config.rpc.set_url(rpc_url.clone());
+            config.rpc.url = Some(rpc_url.clone());
         }
 
         if let Some(cache_db) = &self.cache_db {
@@ -420,8 +541,8 @@ impl Cli {
         // Initialize cache
         let cache = Cache::new(&PathBuf::from(&config.database.path)).await?;
 
-        // Check if multi-RPC is configured
-        let rpc_endpoints = config.rpc.endpoints();
+        // Get RPC endpoints from config
+        let rpc_endpoints = config.rpc.endpoints.clone().unwrap_or_default();
         let use_multi_rpc = rpc_endpoints.len() > 1;
 
         if use_multi_rpc {
@@ -437,7 +558,7 @@ impl Cli {
 
             let sched: Arc<RpcScheduler> = Arc::new(
                 RpcScheduler::new(
-                    rpc_endpoints,
+                    rpc_endpoints.clone(),
                     config.rate_limiting.clone(),
                     Arc::new(cache.clone()),
                 )
@@ -599,17 +720,83 @@ impl Cli {
                 output,
                 min_stamps,
                 show_delegated_only,
+                role,
+                live_only,
+                price,
+                refresh,
+                max_retries: _,  // Ignored, use config
+                cache_validity_blocks,
             } => {
                 self.execute_address_summary(
                     cache,
+                    client,
+                    &registry,
+                    &config,
                     output.clone(),
                     *min_stamps,
                     *show_delegated_only,
+                    role.clone(),
+                    *live_only,
+                    price.clone(),
+                    *refresh,
+                    *cache_validity_blocks,
                 )
                 .await
             }
             Commands::Migrations => self.execute_migrations(cache).await,
             Commands::Reset => unreachable!("Reset command handled early"),
+            Commands::DiscoverChequebooks {
+                from_block,
+                to_block,
+                refresh,
+                factory,
+            } => {
+                self.execute_discover_chequebooks(
+                    cache,
+                    client,
+                    &config,
+                    *from_block,
+                    *to_block,
+                    *refresh,
+                    factory.clone(),
+                )
+                .await
+            }
+            Commands::SyncChequebooks {
+                from_block,
+                to_block,
+                refresh,
+                chequebook,
+                parallel_batch_size,
+            } => {
+                self.execute_sync_chequebooks(
+                    cache,
+                    client,
+                    &config,
+                    *from_block,
+                    *to_block,
+                    *refresh,
+                    chequebook.clone(),
+                    *parallel_batch_size,
+                )
+                .await
+            }
+            Commands::ChequeSummary {
+                from_block,
+                to_block,
+                output,
+            } => {
+                self.execute_cheque_summary(cache, *from_block, *to_block, output.clone())
+                    .await
+            }
+            Commands::ChequebookBalances { output, refresh } => {
+                self.execute_chequebook_balances(cache, client, &config, output.clone(), *refresh)
+                    .await
+            }
+            Commands::PaymentChannelSummary { group_by, months } => {
+                self.execute_payment_channel_summary(cache, group_by.clone(), *months)
+                    .await
+            }
         }?;
 
         // Print RPC stats if multi-RPC mode was used
@@ -1187,21 +1374,745 @@ impl Cli {
         .map_err(|e| anyhow::anyhow!(e))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_address_summary(
         &self,
         cache: Cache,
+        client: BlockchainClient,
+        registry: &ContractRegistry,
+        config: &AppConfig,
         output: OutputFormat,
         min_stamps: u32,
         show_delegated_only: bool,
+        role: Option<RoleFilter>,
+        live_only: bool,
+        price: Option<String>,
+        refresh: bool,
+        cache_validity_blocks: u64,
     ) -> Result<()> {
         crate::commands::address_summary::execute(
             cache,
+            &client,
+            registry,
+            config,
             output,
             min_stamps,
             show_delegated_only,
+            role,
+            live_only,
+            price,
+            refresh,
+            cache_validity_blocks,
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_discover_chequebooks(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        refresh: bool,
+        factory_filter: Option<String>,
+    ) -> Result<()> {
+        use crate::contracts::impls::SimpleSwapFactoryContract;
+
+        tracing::info!("Discovering chequebooks from factory contracts...");
+
+        // Filter factories by active status and optional name filter
+        let factories: Vec<_> = config
+            .payment_channel_factories
+            .iter()
+            .filter(|f| {
+                // Apply name filter if specified
+                if let Some(ref filter) = factory_filter
+                    && !f.name.contains(filter) {
+                        return false;
+                    }
+                // Only scan active factories unless specific factory requested
+                factory_filter.is_some() || f.active
+            })
+            .collect();
+
+        if factories.is_empty() {
+            if factory_filter.is_some() {
+                return Err(anyhow::anyhow!(
+                    "No factory found matching filter '{}'",
+                    factory_filter.unwrap()
+                ));
+            } else {
+                println!("⚠️ No active payment channel factories configured.");
+                println!("   Enable factories in config.yaml or use --factory to specify one.");
+                return Ok(());
+            }
+        }
+
+        println!(
+            "📡 Scanning {} factory contract{}...\n",
+            factories.len(),
+            if factories.len() == 1 { "" } else { "s" }
+        );
+
+        let mut total_discovered = 0;
+
+        // Process each factory
+        for factory_config in factories {
+            println!("🏭 Factory: {}", factory_config.name);
+            println!("   Address: {}", factory_config.address);
+            println!("   Network: {}", factory_config.network);
+
+            // Create factory contract instance
+            let factory = SimpleSwapFactoryContract::new(
+                factory_config.address.clone(),
+                factory_config.deployment_block,
+                factory_config.name.clone(),
+            );
+
+            // Determine block range
+            let from = from_block.unwrap_or(factory_config.deployment_block);
+            let to = to_block.unwrap_or(u64::MAX);
+
+            tracing::info!(
+                "Scanning factory '{}' from block {} to {}",
+                factory_config.name,
+                from,
+                if to == u64::MAX {
+                    "latest".to_string()
+                } else {
+                    to.to_string()
+                }
+            );
+
+            // Fetch deployment events with incremental storage
+            let cache_clone = cache.clone();
+            let client_clone = client.clone();
+            let retry_config = config.retry.clone();
+            let deployments = client
+                .fetch_factory_deployment_events(
+                    from,
+                    to,
+                    &cache,
+                    &factory,
+                    &config.blockchain,
+                    &config.retry,
+                    refresh,
+                    |chunk_deployments| {
+                        let cache = cache_clone.clone();
+                        let client = client_clone.clone();
+                        let retry = retry_config.clone();
+                        async move {
+                            // Store deployments from this chunk immediately
+                            // Also populate issuer address from RPC
+                            for deployment in &chunk_deployments {
+                                // First store the deployment
+                                cache.store_chequebook_deployment(deployment).await?;
+
+                                // Then query and update issuer address
+                                match client.get_chequebook_issuer(&deployment.chequebook_address, &retry).await {
+                                    Ok(issuer) => {
+                                        tracing::debug!("Got issuer {} for chequebook {}", issuer, deployment.chequebook_address);
+                                        cache.update_chequebook_issuer(&deployment.chequebook_address, &issuer).await?;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Failed to get issuer for {}: {}", deployment.chequebook_address, e);
+                                    }
+                                }
+                            }
+
+                            tracing::debug!(
+                                "Stored {} chequebook deployments from chunk",
+                                chunk_deployments.len()
+                            );
+
+                            Ok(())
+                        }
+                    },
+                )
+                .await?;
+
+            total_discovered += deployments.len();
+
+            if deployments.is_empty() {
+                println!("   ℹ️  No new deployments found\n");
+            } else {
+                println!(
+                    "   ✅ Discovered {} chequebook{}\n",
+                    deployments.len(),
+                    if deployments.len() == 1 { "" } else { "s" }
+                );
+
+                // Show first few discovered addresses
+                let show_count = deployments.len().min(5);
+                for deployment in deployments.iter().take(show_count) {
+                    println!("      • {}", deployment.chequebook_address);
+                }
+
+                if deployments.len() > show_count {
+                    println!("      ... and {} more", deployments.len() - show_count);
+                }
+                println!();
+            }
+        }
+
+        // Summary statistics
+        let total_stored = cache.count_chequebooks().await?;
+        println!("📊 Discovery Complete");
+        println!("   New discoveries: {total_discovered}");
+        println!("   Total in database: {total_stored}");
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_sync_chequebooks(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        refresh: bool,
+        chequebook_filter: Option<String>,
+        parallel_batch_size: usize,
+    ) -> Result<()> {
+        use crate::contracts::impls::ERC20SimpleSwapContract;
+        use futures::future::join_all;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        tracing::info!("Syncing events from discovered chequebooks...");
+
+        // Load all discovered chequebooks from database
+        let mut chequebooks = cache.get_discovered_chequebooks().await?;
+
+        if chequebooks.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first to discover chequebook contracts.");
+            return Ok(());
+        }
+
+        // Apply chequebook filter if specified
+        if let Some(ref filter) = chequebook_filter {
+            let before = chequebooks.len();
+            chequebooks.retain(|c| c.chequebook_address.contains(filter));
+            if chequebooks.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "No chequebook found matching filter '{filter}'"
+                ));
+            }
+            tracing::info!(
+                "Chequebook filter: {} -> {} chequebooks",
+                before,
+                chequebooks.len()
+            );
+        }
+
+        let total_chequebooks = chequebooks.len();
+        let num_batches = total_chequebooks.div_ceil(parallel_batch_size);
+
+        println!(
+            "💳 Syncing {} chequebook{} (batch size: {}, {} batches)...\n",
+            total_chequebooks,
+            if total_chequebooks == 1 { "" } else { "s" },
+            parallel_batch_size,
+            num_batches
+        );
+
+        // Shared config for parallel tasks
+        let blockchain_config = Arc::new(config.blockchain.clone());
+        let retry_config = Arc::new(config.retry.clone());
+        let total_events = Arc::new(AtomicUsize::new(0));
+        let total_errors = Arc::new(AtomicUsize::new(0));
+        let completed_count = Arc::new(AtomicUsize::new(0));
+
+        // Process chequebooks in parallel batches
+        for (batch_idx, batch) in chequebooks.chunks(parallel_batch_size).enumerate() {
+            let batch_start = batch_idx * parallel_batch_size;
+
+            println!(
+                "⚡ Batch {}/{}: Processing {} chequebooks in parallel...",
+                batch_idx + 1,
+                num_batches,
+                batch.len()
+            );
+
+            let futures: Vec<_> = batch
+                .iter()
+                .enumerate()
+                .map(|(i, deployment)| {
+                    let client = client.clone();
+                    let cache = cache.clone();
+                    let blockchain_config = Arc::clone(&blockchain_config);
+                    let retry_config = Arc::clone(&retry_config);
+                    let deployment = deployment.clone();
+                    let global_idx = batch_start + i;
+
+                    async move {
+                        let chequebook = ERC20SimpleSwapContract::new(
+                            deployment.chequebook_address.clone(),
+                            deployment.deployed_at_block,
+                        );
+
+                        let from = from_block.unwrap_or(deployment.deployed_at_block);
+                        let to = to_block.unwrap_or(u64::MAX);
+
+                        tracing::debug!(
+                            "Syncing chequebook '{}' from block {} to {}",
+                            deployment.chequebook_address,
+                            from,
+                            if to == u64::MAX {
+                                "latest".to_string()
+                            } else {
+                                to.to_string()
+                            }
+                        );
+
+                        // Fetch events from this chequebook with incremental storage
+                        let cache_clone = cache.clone();
+                        let events = client
+                            .fetch_chequebook_events(
+                                from,
+                                to,
+                                &cache,
+                                &chequebook,
+                                &blockchain_config,
+                                &retry_config,
+                                refresh,
+                                |chunk_events| {
+                                    let cache = cache_clone.clone();
+                                    async move {
+                                        cache.store_payment_channel_events(&chunk_events).await?;
+                                        Ok(())
+                                    }
+                                },
+                            )
+                            .await;
+
+                        (global_idx, deployment.chequebook_address.clone(), events)
+                    }
+                })
+                .collect();
+
+            let results = join_all(futures).await;
+
+            // Process results from this batch
+            let mut batch_events = 0usize;
+            let mut batch_errors = 0usize;
+
+            for (_idx, _address, result) in results {
+                let completed = completed_count.fetch_add(1, Ordering::SeqCst) + 1;
+
+                match result {
+                    Ok(events) => {
+                        total_events.fetch_add(events.len(), Ordering::SeqCst);
+                        batch_events += events.len();
+                    }
+                    Err(_e) => {
+                        total_errors.fetch_add(1, Ordering::SeqCst);
+                        batch_errors += 1;
+                    }
+                }
+
+                // Print progress line (updates in place)
+                let percentage = (completed as f64 / total_chequebooks as f64) * 100.0;
+                print!("\r   {completed} / {total_chequebooks} ({percentage:.1}%)");
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+            }
+
+            // Print batch summary on new line
+            println!(
+                " - batch {}/{}: {} events, {} errors",
+                batch_idx + 1,
+                num_batches,
+                batch_events,
+                batch_errors
+            );
+        }
+
+        // Summary statistics
+        let total_stored = cache.count_payment_channel_events().await?;
+        let events_count = total_events.load(Ordering::SeqCst);
+        let errors_count = total_errors.load(Ordering::SeqCst);
+
+        println!("📊 Sync Complete");
+        println!("   New events: {events_count}");
+        println!("   Errors: {errors_count}");
+        println!("   Total in database: {total_stored}");
+
+        Ok(())
+    }
+
+    async fn execute_cheque_summary(
+        &self,
+        cache: Cache,
+        from_block: Option<u64>,
+        to_block: Option<u64>,
+        output: OutputFormat,
+    ) -> Result<()> {
+        tracing::info!("Generating cheque summary...");
+
+        // Get all chequebook deployments for address mapping
+        let deployments = cache.get_discovered_chequebooks().await?;
+        if deployments.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first.");
+            return Ok(());
+        }
+
+        // Create a map of chequebook address -> deployment info
+        let deployment_map: std::collections::HashMap<_, _> = deployments
+            .iter()
+            .map(|d| (d.chequebook_address.clone(), d))
+            .collect();
+
+        // Query for ChequeCashed events
+        let events = cache
+            .get_payment_channel_events(from_block, to_block, Some("ChequeCashed"))
+            .await?;
+
+        if events.is_empty() {
+            println!("ℹ️  No ChequeCashed events found in specified range.");
+            return Ok(());
+        }
+
+        // Aggregate by chequebook
+        #[derive(Default, tabled::Tabled)]
+        struct ChequebookStats {
+            #[tabled(rename = "Chequebook Address")]
+            address: String,
+            #[tabled(rename = "Issuer")]
+            issuer: String,
+            #[tabled(rename = "Cheques Cashed")]
+            total_cheques: u64,
+            #[tabled(rename = "Total Amount (PLUR)")]
+            total_amount: String,
+        }
+
+        use crate::events::PaymentChannelEventData;
+        let mut stats_map: std::collections::HashMap<String, (u64, u128, Option<String>)> =
+            std::collections::HashMap::new();
+
+        for event in &events {
+            let (count, total_amount, issuer) = stats_map
+                .entry(event.chequebook_address.clone())
+                .or_insert((0, 0, None));
+            *count += 1;
+
+            // Parse and add total_payout from event
+            if let PaymentChannelEventData::ChequeCashed { total_payout, .. } = &event.data
+                && let Ok(amount) = total_payout.parse::<u128>() {
+                    *total_amount += amount;
+                }
+
+            // Add issuer from deployment info
+            if issuer.is_none()
+                && let Some(deployment) = deployment_map.get(&event.chequebook_address) {
+                    *issuer = deployment.issuer_address.clone();
+                }
+        }
+
+        // Convert to sorted vec
+        let mut results: Vec<ChequebookStats> = stats_map
+            .into_iter()
+            .map(|(address, (count, total, issuer))| ChequebookStats {
+                address,
+                issuer: issuer.unwrap_or_else(|| "N/A".to_string()),
+                total_cheques: count,
+                total_amount: total.to_string(),
+            })
+            .collect();
+        results.sort_by(|a, b| b.total_cheques.cmp(&a.total_cheques));
+
+        // Output results
+        match output {
+            OutputFormat::Table => {
+                use tabled::Table;
+                let table = Table::new(&results).to_string();
+                println!("\n{table}\n");
+                println!(
+                    "Total chequebooks: {} | Total events: {}",
+                    results.len(),
+                    events.len()
+                );
+            }
+            OutputFormat::Json => {
+                let json_results: Vec<_> = results
+                    .iter()
+                    .map(|stat| {
+                        serde_json::json!({
+                            "chequebook_address": stat.address,
+                            "issuer_address": stat.issuer,
+                            "total_cheques_cashed": stat.total_cheques,
+                            "total_amount": stat.total_amount,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json_results)?);
+            }
+            OutputFormat::Csv => {
+                println!("chequebook_address,issuer_address,total_cheques_cashed,total_amount");
+                for stat in &results {
+                    println!(
+                        "{},{},{},{}",
+                        stat.address, stat.issuer, stat.total_cheques, stat.total_amount
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_chequebook_balances(
+        &self,
+        cache: Cache,
+        client: BlockchainClient,
+        config: &AppConfig,
+        output: OutputFormat,
+        _refresh: bool,
+    ) -> Result<()> {
+        tracing::info!("Retrieving chequebook balances...");
+
+        // Get all chequebook deployments
+        let deployments = cache.get_discovered_chequebooks().await?;
+        if deployments.is_empty() {
+            println!("⚠️ No chequebooks found in database.");
+            println!("   Run 'discover-chequebooks' first.");
+            return Ok(());
+        }
+
+        if matches!(output, OutputFormat::Table) {
+            println!(
+                "💳 Retrieving balances for {} chequebook{}...\n",
+                deployments.len(),
+                if deployments.len() == 1 { "" } else { "s" }
+            );
+        }
+
+        #[derive(serde::Serialize, tabled::Tabled)]
+        struct BalanceInfo {
+            #[tabled(rename = "Chequebook Address")]
+            chequebook_address: String,
+            #[tabled(rename = "Issuer")]
+            issuer_address: String,
+            #[tabled(rename = "Balance (PLUR)")]
+            balance: String,
+        }
+
+        let mut balances = Vec::new();
+
+        for deployment in &deployments {
+            // Always query RPC for balance (refresh flag can be used for future caching)
+            tracing::debug!("Querying balance for {}", deployment.chequebook_address);
+            let balance = match client
+                .get_chequebook_balance(&deployment.chequebook_address, &config.retry)
+                .await
+            {
+                Ok(bal) => bal.to_string(),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to get balance for {}: {}",
+                        deployment.chequebook_address,
+                        e
+                    );
+                    "ERROR".to_string()
+                }
+            };
+
+            balances.push(BalanceInfo {
+                chequebook_address: deployment.chequebook_address.clone(),
+                issuer_address: deployment
+                    .issuer_address
+                    .clone()
+                    .unwrap_or_else(|| "N/A".to_string()),
+                balance,
+            });
+        }
+
+        // Output results
+        match output {
+            OutputFormat::Table => {
+                use tabled::Table;
+                let table = Table::new(&balances).to_string();
+                println!("\n{table}\n");
+                println!("Total chequebooks: {}", balances.len());
+            }
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&balances)?);
+            }
+            OutputFormat::Csv => {
+                println!("chequebook_address,issuer_address,balance_plur");
+                for info in &balances {
+                    println!(
+                        "{},{},{}",
+                        info.chequebook_address, info.issuer_address, info.balance
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn execute_payment_channel_summary(
+        &self,
+        cache: Cache,
+        group_by: GroupBy,
+        months: u32,
+    ) -> Result<()> {
+        use crate::events::{PaymentChannelEventData, PaymentChannelEventType};
+        use chrono::Datelike;
+
+        tracing::info!("Generating payment channel summary...");
+
+        // Get all payment channel events
+        let events = cache.get_payment_channel_events_recent(months).await?;
+
+        if events.is_empty() {
+            println!("\nNo payment channel events found in cache.\n");
+            return Ok(());
+        }
+
+        println!("\n## Payment Channel Activity Summary\n");
+
+        // Overall statistics
+        println!("### Overall Statistics\n");
+
+        let total_events = events.len();
+        let cheque_cashed = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::ChequeCashed)).count();
+        let cheque_bounced = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::ChequeBounced)).count();
+        let hard_deposit = events.iter().filter(|e| matches!(
+            e.event_type,
+            PaymentChannelEventType::HardDepositAmountChanged
+                | PaymentChannelEventType::HardDepositDecreasePrepared
+                | PaymentChannelEventType::HardDepositTimeoutChanged
+        )).count();
+        let withdrawals = events.iter().filter(|e| matches!(e.event_type, PaymentChannelEventType::Withdraw)).count();
+
+        // Calculate total value transferred
+        let total_transferred: u128 = events
+            .iter()
+            .filter_map(|e| match &e.data {
+                PaymentChannelEventData::ChequeCashed { total_payout, .. } => {
+                    total_payout.parse::<u128>().ok()
+                }
+                _ => None,
+            })
+            .sum();
+
+        // Count unique chequebooks
+        let unique_chequebooks: std::collections::HashSet<_> =
+            events.iter().map(|e| &e.chequebook_address).collect();
+
+        println!("- **Total Events:** {total_events}");
+        println!("- **Cheques Cashed:** {cheque_cashed}");
+        println!("- **Cheques Bounced:** {cheque_bounced}");
+        println!("- **Hard Deposit Events:** {hard_deposit}");
+        println!("- **Withdrawals:** {withdrawals}");
+        println!("- **Total Value Transferred:** {total_transferred} PLUR");
+        println!("- **Unique Chequebooks:** {}\n", unique_chequebooks.len());
+
+        // Time range
+        if let (Some(first), Some(last)) = (events.first(), events.last()) {
+            println!("### Time Range\n");
+            println!("- **From:** {}", first.block_timestamp.format("%Y-%m-%d %H:%M"));
+            println!("- **To:** {}", last.block_timestamp.format("%Y-%m-%d %H:%M"));
+            println!(
+                "- **Duration:** {} days\n",
+                (last.block_timestamp - first.block_timestamp).num_days()
+            );
+        }
+
+        // Group by time period
+        #[derive(Default)]
+        struct PeriodStats {
+            period_label: String,
+            cheque_cashed_count: usize,
+            total_transferred: u128,
+            unique_chequebooks: std::collections::HashSet<String>,
+            total_events: usize,
+        }
+
+        let mut period_map: std::collections::HashMap<String, PeriodStats> =
+            std::collections::HashMap::new();
+
+        for event in &events {
+            let period_key = match group_by {
+                GroupBy::Day => event.block_timestamp.format("%Y-%m-%d").to_string(),
+                GroupBy::Week => {
+                    let iso_week = event.block_timestamp.iso_week();
+                    format!("{}-W{:02}", iso_week.year(), iso_week.week())
+                }
+                GroupBy::Month => event.block_timestamp.format("%Y-%m").to_string(),
+            };
+
+            let stats = period_map.entry(period_key.clone()).or_insert_with(|| PeriodStats {
+                period_label: period_key,
+                ..Default::default()
+            });
+
+            stats.total_events += 1;
+            stats.unique_chequebooks.insert(event.chequebook_address.clone());
+
+            if matches!(event.event_type, PaymentChannelEventType::ChequeCashed) {
+                stats.cheque_cashed_count += 1;
+                if let PaymentChannelEventData::ChequeCashed { total_payout, .. } = &event.data
+                    && let Ok(amount) = total_payout.parse::<u128>() {
+                        stats.total_transferred += amount;
+                    }
+            }
+        }
+
+        // Sort periods chronologically
+        let mut periods: Vec<_> = period_map.into_values().collect();
+        periods.sort_by(|a, b| a.period_label.cmp(&b.period_label));
+
+        println!("### Activity by {group_by:?}\n");
+
+        #[derive(tabled::Tabled)]
+        struct PeriodRow {
+            #[tabled(rename = "Period")]
+            period: String,
+            #[tabled(rename = "Cheques Cashed")]
+            cheques: usize,
+            #[tabled(rename = "Value Transferred (PLUR)")]
+            value: String,
+            #[tabled(rename = "Total Events")]
+            total: usize,
+            #[tabled(rename = "Unique Chequebooks")]
+            unique: usize,
+        }
+
+        let rows: Vec<PeriodRow> = periods
+            .iter()
+            .map(|stats| PeriodRow {
+                period: stats.period_label.clone(),
+                cheques: stats.cheque_cashed_count,
+                value: stats.total_transferred.to_string(),
+                total: stats.total_events,
+                unique: stats.unique_chequebooks.len(),
+            })
+            .collect();
+
+        use tabled::Table;
+        let table = Table::new(rows).to_string();
+        println!("{table}\n");
+
+        // Most active period
+        if let Some(most_active) = periods.iter().max_by_key(|s| s.total_events) {
+            println!("### Most Active Period\n");
+            println!(
+                "**{}** with {} events and {} PLUR transferred\n",
+                most_active.period_label, most_active.total_events, most_active.total_transferred
+            );
+        }
+
+        Ok(())
     }
 
     async fn execute_migrations(&self, cache: Cache) -> Result<()> {

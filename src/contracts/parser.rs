@@ -19,7 +19,10 @@
 /// - 50% code reduction through shared event structure handling
 use crate::contracts::abi;
 use crate::error::Result;
-use crate::events::{EventData, EventType, StampEvent, StorageIncentivesEvent};
+use crate::events::{
+    ChequebookDeployment, EventData, EventType, PaymentChannelEvent, PaymentChannelEventData,
+    PaymentChannelEventType, StampEvent, StorageIncentivesEvent,
+};
 use alloy::primitives::TxHash;
 use alloy::rpc::types::Log;
 use alloy::sol_types::SolEvent;
@@ -1097,6 +1100,150 @@ pub fn parse_redistribution_event(
             redundancy_count: None,
             chunk_index_in_rc: Some(event.indexInRC.to::<u64>()),
             chunk_address: Some(format!("{:?}", event.chunkAddress)),
+        }));
+    }
+
+    // Unknown event type
+    Ok(None)
+}
+
+// ============================================================================
+// Payment Channel Event Parsers (Bandwidth Incentives)
+// ============================================================================
+
+/// Parse SimpleSwapDeployed event from factory contract
+pub fn parse_factory_deployment_event(
+    log: Log,
+    block_number: u64,
+    block_timestamp: DateTime<Utc>,
+    transaction_hash: TxHash,
+    factory_address: &str,
+) -> Result<Option<ChequebookDeployment>> {
+    use crate::contracts::abi::SimpleSwapFactory::SimpleSwapDeployed;
+
+    // Try to decode as SimpleSwapDeployed
+    if let Ok(event) = SimpleSwapDeployed::decode_log(&log.inner, true) {
+        return Ok(Some(ChequebookDeployment {
+            chequebook_address: format!("{:?}", event.contractAddress),
+            factory_address: factory_address.to_string(),
+            deployed_at_block: block_number,
+            deployed_at_timestamp: block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            issuer_address: None, // Will be populated later if needed
+            overlay_address: None, // Will be populated later if available
+        }));
+    }
+
+    Ok(None)
+}
+
+/// Parse payment channel events from ERC20SimpleSwap contracts
+pub fn parse_payment_channel_event(
+    log: Log,
+    block_number: u64,
+    block_timestamp: DateTime<Utc>,
+    transaction_hash: TxHash,
+    log_index: u64,
+    chequebook_address: &str,
+) -> Result<Option<PaymentChannelEvent>> {
+    use crate::contracts::abi::ERC20SimpleSwap::{
+        ChequeBounced, ChequeCashed, HardDepositAmountChanged, HardDepositDecreasePrepared,
+        HardDepositTimeoutChanged, Withdraw,
+    };
+
+    // Try ChequeCashed
+    if let Ok(event) = ChequeCashed::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::ChequeCashed,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::ChequeCashed {
+                beneficiary: format!("{:?}", event.beneficiary),
+                recipient: format!("{:?}", event.recipient),
+                caller: format!("{:?}", event.caller),
+                total_payout: event.totalPayout.to_string(),
+                cumulative_payout: event.cumulativePayout.to_string(),
+                caller_payout: event.callerPayout.to_string(),
+            },
+        }));
+    }
+
+    // Try ChequeBounced
+    if let Ok(_event) = ChequeBounced::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::ChequeBounced,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::ChequeBounced {},
+        }));
+    }
+
+    // Try HardDepositAmountChanged
+    if let Ok(event) = HardDepositAmountChanged::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::HardDepositAmountChanged,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::HardDepositAmountChanged {
+                beneficiary: format!("{:?}", event.beneficiary),
+                amount: event.amount.to_string(),
+            },
+        }));
+    }
+
+    // Try HardDepositDecreasePrepared
+    if let Ok(event) = HardDepositDecreasePrepared::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::HardDepositDecreasePrepared,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::HardDepositDecreasePrepared {
+                beneficiary: format!("{:?}", event.beneficiary),
+                decrease_amount: event.decreaseAmount.to_string(),
+            },
+        }));
+    }
+
+    // Try HardDepositTimeoutChanged
+    if let Ok(event) = HardDepositTimeoutChanged::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::HardDepositTimeoutChanged,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::HardDepositTimeoutChanged {
+                beneficiary: format!("{:?}", event.beneficiary),
+                timeout: event.timeout.to::<u64>(),
+            },
+        }));
+    }
+
+    // Try Withdraw
+    if let Ok(event) = Withdraw::decode_log(&log.inner, true) {
+        return Ok(Some(PaymentChannelEvent {
+            event_type: PaymentChannelEventType::Withdraw,
+            chequebook_address: chequebook_address.to_string(),
+            block_number,
+            block_timestamp,
+            transaction_hash: format!("{transaction_hash:?}"),
+            log_index,
+            data: PaymentChannelEventData::Withdraw {
+                amount: event.amount.to_string(),
+            },
         }));
     }
 

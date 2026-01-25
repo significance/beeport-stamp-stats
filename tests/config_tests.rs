@@ -12,7 +12,7 @@ use beeport_stamp_stats::config::{AppConfig, BlockchainConfig, ContractConfig, R
 fn test_default_config() {
     let config = AppConfig::default();
 
-    assert_eq!(config.rpc.url, "https://rpc.gnosis.gateway.fm");
+    assert_eq!(config.rpc.url, Some("https://rpc.gnosis.gateway.fm".to_string()));
     assert_eq!(config.database.path, "./stamp-cache.db");
     assert_eq!(config.blockchain.chunk_size, 10000);
     assert_eq!(config.blockchain.block_time_seconds, 5.0);
@@ -32,7 +32,7 @@ fn test_config_validation_success() {
 #[test]
 fn test_config_validation_invalid_rpc_url() {
     let mut config = AppConfig::default();
-    config.rpc.url = "invalid-url".to_string();
+    config.rpc.url = Some("invalid-url".to_string());
 
     let result = config.validate();
     assert!(result.is_err());
@@ -161,7 +161,7 @@ fn test_config_load_uses_defaults_when_no_file() {
 
     if let Ok(config) = config {
         // Verify it has default values
-        assert_eq!(config.rpc.url, "https://rpc.gnosis.gateway.fm");
+        assert_eq!(config.rpc.url, Some("https://rpc.gnosis.gateway.fm".to_string()));
         assert_eq!(config.blockchain.chunk_size, 10000);
     }
 }
@@ -202,8 +202,9 @@ fn test_contract_config_creation() {
 #[test]
 fn test_rpc_config_creation() {
     let rpc = RpcConfig {
-        url: "https://test.rpc".to_string(),
+        url: Some("https://test.rpc".to_string()),
+        endpoints: None,
     };
 
-    assert_eq!(rpc.url, "https://test.rpc");
+    assert_eq!(rpc.url, Some("https://test.rpc".to_string()));
 }

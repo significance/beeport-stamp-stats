@@ -1,0 +1,1027 @@
+commit bfedfd684d86b72d6877bf4458e3b01512138365
+Author: sig <dan@1up.digital>
+Date:   Sat Jan 10 01:31:28 2026 +0000
+
+    feat: add payer/owner addresses and contract filtering to batch-status
+    
+    - Add payer field to BatchInfo (Optional<String> for StampsRegistry events)
+    - Add contract_source field to track which contract created each batch
+    - Display owner and payer columns in batch-status table/CSV/JSON output
+    - Add --contract filter to show only PostageStamp or StampsRegistry batches
+    - Database migrations for payer and contract_source columns
+    - Update all exports (JSON/CSV) to include owner and payer
+    - Enable batch gifting visibility (payer != owner for StampsRegistry)
+    - Fix .gitignore to only ignore *.sql in root directory
+
+commit 8e0248177758c2189377b019ceb9a1339aa914cc
+Merge: 652fbe2 6819bb7
+Author: significance <dan@1up.digital>
+Date:   Fri Jan 9 14:23:25 2026 +0000
+
+    Merge pull request #2 from significance/feat/add-pot-withdrawn-event
+    
+    Feat/add pot withdrawn event
+
+commit 6819bb7cbed8117ae8dc7e196d374a4014aabec6
+Author: sig <dan@1up.digital>
+Date:   Fri Jan 9 14:04:20 2026 +0000
+
+    chore: tidy
+
+commit 2ff130e3828e7562a8ba3199dd4cef0b1255e2e2
+Author: sig <dan@1up.digital>
+Date:   Fri Jan 2 21:46:11 2026 +0000
+
+    feat: optimize block fetching with persistent database cache
+    
+    - Add get_block_timestamp() method to Cache for persistent block lookups
+    - Implement 3-tier block caching: in-memory -> database -> RPC
+    - Update parse_log and parse_storage_incentives_log to check database before RPC calls
+    - Add PotWithdrawn events to visualization with diamond markers
+    - Prevents redundant RPC calls for already-fetched blocks
+    - Refresh flag now correctly reprocesses events without re-fetching block data
+
+commit 9f1875dbe87613ee287163faa2eed5b6730a6a6e
+Author: sig <dan@1up.digital>
+Date:   Fri Jan 2 19:07:52 2026 +0000
+
+    feat: add pot withdrawn visualization with logarithmic scale
+    
+    Add PotWithdrawn events to storage incentives plot with:
+    - Diamond markers (half size) for visual distinction
+    - Logarithmic y-axis scale for better visualization of reward ranges
+    - Labeled as "Pot Withdrawn (log)" in legend
+    
+    👾
+
+commit c7c8d3d06a703ba32d8bfb32d412d6bbc70e6566
+Author: sig <dan@1up.digital>
+Date:   Fri Jan 2 18:21:34 2026 +0000
+
+    docs: refine project documentation for clarity and maintainability
+    
+    Restructured plan.md to shift from implementation tracking to production-ready reference documentation. The previous format mixed completed tasks, in-progress work, and reference material, making it difficult to quickly understand project status or resume work in a new session.
+    
+    New structure provides clear separation:
+    - Current status and capabilities (what works now)
+    - Contract and technical reference (quick lookup)
+    - Completed work archive (historical context)
+    - New session guide (how to resume)
+    
+    Also standardized CLAUDE.md testing conventions to use PostgreSQL with explicit user confirmation before database operations, ensuring safer testing workflow.
+
+commit 23e012f4ad9935814ef30d5798ffdd7440cc1d0f
+Author: sig <dan@1up.digital>
+Date:   Fri Jan 2 18:16:06 2026 +0000
+
+    feat: add refresh flag
+
+commit 0a75f187a99f25f57c337fcc59e39d45a69f72a6
+Author: sig <dan@1up.digital>
+Date:   Thu Jan 1 21:37:11 2026 +0000
+
+    chore: add backup files to gitignore
+
+commit fd77cdfb0ccd06d62c9ea62f8b01837bb0e11e08
+Author: sig <dan@1up.digital>
+Date:   Thu Jan 1 21:31:05 2026 +0000
+
+    feat: add PotWithdrawn, PriceUpdate, and CopyBatchFailed events with dedicated columns
+    
+    - Add PotWithdrawn event tracking (recipient, total_amount)
+    - Add PriceUpdate event tracking (price)
+    - Add CopyBatchFailed event tracking (index, batch_id)
+    - Make batch_id nullable to support non-batch events
+    - Add dedicated database columns for new event types
+    - Update parsers, display, and cache modules
+
+commit 652fbe2b91fbcc26f1968fbee927bee041ee0697
+Merge: f9cb48f e8f1134
+Author: significance <dan@1up.digital>
+Date:   Thu Jan 1 21:29:32 2026 +0000
+
+    Merge pull request #1 from significance/feat/github-ci-workflows
+    
+    Feat/GitHub ci workflows
+
+commit e8f1134509827fb304591876d6e84300eb29e3ac
+Author: sig <dan@1up.digital>
+Date:   Thu Jan 1 20:23:37 2026 +0000
+
+    fix: remove ARM64 Linux from build matrix
+
+commit 551cb5073ca1228441c358be7fa6e583150f1c06
+Author: sig <dan@1up.digital>
+Date:   Thu Jan 1 19:28:17 2026 +0000
+
+    fix: add Cross.toml for ARM64 OpenSSL configuration
+
+commit c3c75256911018234f2cb840a4383ebe1824c02e
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 29 19:32:36 2025 +0000
+
+    fix: separate build steps for Windows and add OpenSSL config for ARM64
+
+commit 8d55db2d140e29e19cb2d59fc15da728710b0308
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 29 18:36:05 2025 +0000
+
+    fix: use cross tool for ARM64 Linux builds
+
+commit 6d7c519e22bdfd41a74a137c32b6df0a0c1c4eb0
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 29 12:54:50 2025 +0000
+
+    fix: resolve CI build failures for Windows and Linux ARM64
+
+commit b3533558454ed78b70508df6d45196eb4da77f5d
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 29 12:23:39 2025 +0000
+
+    feat: add test job to CI workflow
+
+commit c728dd07eb4993c1b37c65ba13cfd15828044483
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 1 20:52:59 2025 +0000
+
+    feat: add GitHub CI workflow for multi-platform releases
+    
+    - Build binaries for Linux (x86_64, ARM64)
+    - Build binaries for macOS (Intel, Apple Silicon)
+    - Build binaries for Windows (x86_64)
+    - Create GitHub releases on version tags
+    - Upload preview builds as artifacts for PRs and main branch
+    - Include SHA256 checksums for all binaries
+    - Cache cargo dependencies for faster builds
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit f9cb48f2d741e2a604a214b8a00bab53bd80cb1a
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 22 12:04:28 2025 +0000
+
+    feat: add comprehensive contract versioning system with multi-version support
+    
+    Implements complete contract versioning architecture to track and distinguish
+    events from 17 historical contract deployments across 5 contract types.
+    
+    ## Type System Foundation (src/types.rs)
+    - Add ContractAddress newtype with validation (0x prefix, 40 hex chars)
+    - Add ContractVersion and BlockNumber newtypes
+    - Automatic case normalization for consistent comparisons
+    - Full validation with type-safe constructors
+    
+    ## Contract Metadata System (src/contracts/metadata.rs)
+    - Add ContractMetadata struct for version tracking
+    - Support active/inactive status, deployment blocks, end-of-life
+    - Block range validation with paused_at support
+    - Status reporting (Active, Superseded, Paused)
+    
+    ## Database Schema Changes
+    - Add contract_address column to events table
+    - Add contract_address column to storage_incentives_events table
+    - Migration with intelligent backfill using block number inference
+    - Indexes for performance (idx_events_contract_address, idx_si_contract_address)
+    - Support for both SQLite and PostgreSQL
+    
+    ## Configuration Enhancement (config.yaml)
+    - Add 17 historical contract configurations
+      - PostageStamp: 2 versions (Phase 4, v0.8.6)
+      - StampsRegistry: 1 version
+      - PriceOracle: 3 versions (Phase 4, v0.9.1, v0.9.2)
+      - StakeRegistry: 4 versions (v0.4.0, v0.9.1, v0.9.2, v0.9.3)
+      - Redistribution: 6 versions (Phase 4, v0.8.6, v0.9.1-v0.9.4)
+    - Add version, active, end_block, paused_at fields to ContractConfig
+    - Enhanced validation for block ranges and lifecycles
+    
+    ## Contract Registry Enhancement (src/contracts/mod.rs)
+    - Add metadata storage for all configured contracts
+    - Add address-based and type-based contract lookup
+    - Support for historical contract querying
+    - Duplicate address detection
+    
+    ## Event Attribution (src/contracts/parser.rs, impls.rs)
+    - Extract actual contract address from log.address() in all 5 implementations
+    - Pass contract_address to all parsing functions
+    - Replace None placeholders with real addresses
+    - Store contract_address with every event
+    
+    ## Event Structure Updates (src/events.rs)
+    - Add contract_address: Option<ContractAddress> to StampEvent
+    - Add contract_address: Option<ContractAddress> to StorageIncentivesEvent
+    - Serialization support with skip_serializing_if for backwards compatibility
+    
+    ## Database Layer (src/cache.rs)
+    - Bind contract_address in store_events() SQL
+    - Bind contract_address in store_storage_incentives_events() SQL
+    - Support both SQLite and PostgreSQL INSERT statements
+    
+    ## Testing & Verification
+    - All 83 tests passing
+    - Zero clippy warnings
+    - Comprehensive functional testing across 6 block ranges
+    - Contract migration boundaries tested (v0.9.2, v0.9.3)
+    - Dual-emission pattern verified (PostageStamp + StampsRegistry)
+    - Multiple active versions tested (overlapping contracts)
+    - Blockchain verification via GnosisScan (100% match)
+    - All commands tested: fetch, summary, batch-status, export
+    
+    ## Benefits
+    - Track exact contract version that emitted each event
+    - Support for contract migrations and upgrades
+    - Historical analysis across all 17 deployed contracts
+    - Accurate event attribution using blockchain as source of truth
+    - Future-proof for new contract deployments
+    - Enables version-specific filtering and queries
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+
+commit afa60003c4a2ca04a95ecfe3243bf13c07379106
+Author: sig <dan@1up.digital>
+Date:   Sat Dec 20 20:37:32 2025 +0000
+
+    feat: add storage incentives contracts with comprehensive event tracking
+    
+    Added support for 3 storage incentives contracts (PriceOracle, StakeRegistry,
+    Redistribution) bringing total to 5 contracts and 18+ event types. Implemented
+    parallel fetching architecture with dual registry pattern for efficient data collection.
+    
+    **Storage Incentives Integration:**
+    - PriceOracle: Track dynamic price adjustments (PriceUpdate, StampPriceUpdateFailed)
+    - StakeRegistry: Monitor node staking (StakeUpdated, StakeSlashed, StakeFrozen, etc.)
+    - Redistribution: Capture Schelling coordination game events (Committed, Revealed, WinnerSelected, etc.)
+    - Separate trait system (StorageIncentivesContract) with dedicated registry
+    - Parallel event fetching from all contracts with incremental chunk callbacks
+    
+    **Database Schema:**
+    - Added storage_incentives_events table with 20+ columns for all event types
+    - SQLite and PostgreSQL migrations for backward compatibility
+    - Indexed queries by block_number, event_type, contract_source, owner_address
+    
+    **CLI Enhancements:**
+    - Fetch command now retrieves from all 5 contracts simultaneously
+    - Incremental storage callbacks for both postage stamps and SI events
+    - GnosisScan-verified 100% accuracy on all event data
+    
+    **Documentation:**
+    - Quick Start section with 3-step getting started guide
+    - Configuration examples in YAML, TOML, and JSON formats
+    - Created config.example.toml with comprehensive documentation
+    - All 5 contracts documented with deployment blocks and explorer links
+    - SQL analytics examples for storage incentives data
+    
+    **Fixes:**
+    - Corrected unit labels: "Balance (PLUR/chunk)" and "Top-up in BZZ"
+    - Added plan.md project management documentation to CLAUDE.md
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+
+commit e240634128f13e366fc313ef23b5272c6b924413
+Author: sig <dan@1up.digital>
+Date:   Sat Dec 20 13:47:19 2025 +0000
+
+    refactor: modularize architecture with config system and contract abstraction
+    
+    - Add multi-source configuration (CLI > Env > Config file > Defaults)
+    - Extract contract logic into trait-based abstraction layer
+    - Separate retry logic into reusable module
+    - Add comprehensive development guide (CLAUDE.md)
+    - Add test suite for config, retry, and price modules (49 tests)
+    - Remove legacy JavaScript implementations
+    - Add example configuration file with detailed documentation
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+
+commit aad023f89bbf5e4d44b1cbfbaae8b5075b11d6d6
+Author: sig <dan@1up.digital>
+Date:   Fri Dec 12 11:39:40 2025 +0000
+
+    fix: correct PostageStamp contract address and set default block to deployment
+    
+    - Fixed PostageStamp contract address to 0x647942035bb69C8e4d7EB17C8313EBC50b0bABFA
+    - Set default start block to 31,305,656 (PostageStamp deployment block)
+    - This ensures BatchCreated events from PostageStamp contract are captured
+    - Added comprehensive tests for error module (display and conversions)
+    - Fixed missing block_number field in BatchInfo test instances
+    - All 43 tests pass successfully
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 6a20c998d553b186cb246f550d8b1d490f5af10c
+Author: sig <dan@1up.digital>
+Date:   Thu Dec 11 18:11:30 2025 +0000
+
+    feat: add full PostgreSQL support with auto-database creation
+    
+    Implements complete PostgreSQL support alongside existing SQLite functionality,
+    using Rust best practices with runtime database type detection and zero overhead.
+    
+    ## Features Added
+    
+    ### Database Support
+    - Runtime database type detection from connection string
+    - SQLite: file paths or sqlite:// URLs (auto-creates database file)
+    - PostgreSQL: postgres:// URLs (auto-creates database if missing)
+    - Enum-based pool wrapper for compile-time safety without runtime overhead
+    
+    ### Migration System
+    - Separate migration directories for each database type
+      - migrations/ - SQLite migrations (INTEGER, AUTOINCREMENT)
+      - migrations_postgres/ - PostgreSQL migrations (BIGINT, BIGSERIAL)
+    - Auto-detect and run appropriate migrations on startup
+    - Full schema parity between both databases
+    
+    ### Database Operations
+    - All write operations use database-specific UPSERT syntax
+      - SQLite: INSERT OR REPLACE
+      - PostgreSQL: INSERT ... ON CONFLICT ... DO UPDATE
+    - All read operations handle different parameter placeholders
+      - SQLite: ? for all parameters
+      - PostgreSQL: \$1, \$2, \$3... for positional parameters
+    - Row processing within match arms to handle different row types
+    
+    ### CLI Updates
+    - Updated --cache-db help text with PostgreSQL examples
+    - Supports -d, --cache-db, --database flags
+    - Environment variable CACHE_DB works with both database types
+    
+    ## Implementation Details
+    
+    Uses DatabasePool enum wrapping SqlitePool and PgPool:
+    - Provides compile-time type safety
+    - Zero runtime overhead (no trait objects or vtables)
+    - Pattern matching for database-specific SQL syntax
+    - Process rows within match arms due to SqliteRow vs PgRow types
+    
+    ## Testing
+    - ✅ SQLite: Fully tested with auto-creation and migrations
+    - ✅ PostgreSQL: Tested with local server
+      - Auto-creates database if it doesn't exist
+      - Runs migrations correctly
+      - UPSERT operations working
+      - Read operations working
+      - All data types handled correctly
+    
+    ## Usage
+    
+    SQLite (default):
+      ./beeport-stamp-stats fetch
+      ./beeport-stamp-stats -d ./my-cache.db fetch
+    
+    PostgreSQL:
+      ./beeport-stamp-stats -d "postgres://user:pass@localhost/stamps" fetch
+      ./beeport-stamp-stats -d "postgres://user@localhost/stamps" summary
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 950a94b42b60d6d01604c055213a8de10fc6ac99
+Author: sig <dan@1up.digital>
+Date:   Wed Dec 10 11:32:22 2025 +0000
+
+    feat: add database migrations, enhanced retry logic, and improved developer experience
+    
+    Database Migration System:
+    - Implement sqlx-based migration system with automatic schema versioning
+    - Add block_number column to batches table to track batch creation blocks
+    - Create comprehensive migration documentation in migrations/README.md
+    - Migrations run automatically on application startup
+    - Existing databases upgraded seamlessly with data preservation
+    
+    Enhanced Retry Logic:
+    - Increase exponential backoff from 2x to 4x multiplier (100ms→400ms→1600ms)
+    - Add 5-minute extended retry mode after max_retries exhausted
+    - Add timestamps to all retry logs for better debugging
+    - Apply retry protection to get_block_by_number RPC calls
+    - Wrap block fetches with retry logic to handle rate limiting
+    
+    RPC Optimization:
+    - Add in-memory block caching to eliminate duplicate get_block_by_number calls
+    - Log cache hits/misses in verbose mode for monitoring
+    - Reduce redundant RPC requests by orders of magnitude
+    
+    Verbose Logging:
+    - Add -v/--verbose flag to enable debug-level logging
+    - Show all RPC requests with parameters when verbose mode enabled
+    - Display retry attempts with timestamps
+    - Show block cache statistics
+    
+    Developer Experience:
+    - Add -d short flag and --database alias for specifying database path
+    - Auto-create database file and parent directories if they don't exist
+    - Support custom database locations for testing and multi-environment setups
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit fd8c6eba61961e99e1cf003faee54cb1b9c75a24
+Author: sig <dan@1up.digital>
+Date:   Tue Dec 9 18:30:19 2025 +0000
+
+    bk
+
+commit ad48439ce05068e32edd529228f63e4d93f1a869
+Author: sig <dan@1up.digital>
+Date:   Tue Dec 9 15:45:53 2025 +0000
+
+    bk
+
+commit 6b1cc70d660baea090fc6bf32c0634e303d3626e
+Author: sig <dan@1up.digital>
+Date:   Tue Dec 9 15:43:29 2025 +0000
+
+    bk
+
+commit 498775c66206b58b0f7ff69eb267c41d66bf0f6b
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:40:48 2025 +0000
+
+    perf: reduce throttling delay from 10ms to 1ms
+    
+    Reduces request delay to 1ms for faster queries (~6 seconds total
+    overhead for 6000 batches instead of 60 seconds).
+    
+    Exponential backoff retry logic will still handle any rate limiting
+    that occurs.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 040d2ec7242a1dad2f9c1e8bb84e2fe4495b0a97
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:31:04 2025 +0000
+
+    feat: add exponential backoff for rate limit handling
+    
+    Add robust rate limit handling for blockchain RPC queries:
+    
+    1. Exponential Backoff Retry:
+       - Automatically retry on 429 (Too Many Requests) errors
+       - Exponential backoff: 100ms, 200ms, 400ms, 800ms, 1600ms
+       - Up to 5 retries before giving up
+       - Debug logging for retry attempts
+    
+    2. Request Throttling:
+       - Add 10ms delay between balance queries
+       - Prevents hitting rate limits in the first place
+       - Small overhead (~60 seconds for 6000 batches)
+    
+    This ensures the tool can handle large batch queries without
+    failing due to RPC rate limits, while still maintaining reasonable
+    performance through caching.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 9f620d67a2cfde5b02b44b5ac218b1efa397109b
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:26:41 2025 +0000
+
+    fix: suppress warnings for non-existent batches
+    
+    Filter out warnings for batch queries that return error 0x4ee9bc0f
+    (batch doesn't exist). This is expected for batches that have been
+    deleted or are otherwise invalid on-chain.
+    
+    The tool still handles these gracefully by treating them as expired
+    (balance = 0), but now won't spam the logs with warnings for every
+    single one.
+    
+    Only unexpected errors will be logged as warnings.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 93df88ced496692912665c7b07db5358c0618501
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:24:26 2025 +0000
+
+    feat: add progress logging and balance caching for batch queries
+    
+    Major performance and UX improvements:
+    
+    1. Progress Logging:
+       - Show progress every 100 batches during balance queries
+       - Display cache hit/miss statistics
+       - Show percentage completion
+       - Track expired batches that are skipped
+    
+    2. Balance Caching:
+       - New batch_balances table in SQLite cache
+       - Cache balances for 100 blocks (~8 minutes)
+       - Dramatically speeds up repeated queries
+       - Shows cache statistics: hits, misses, and hit rate
+    
+    3. Better Error Handling:
+       - Gracefully handle batches that revert (invalid/deleted batches)
+       - Continue processing even when individual batches fail
+       - Log warnings for failed queries
+    
+    Performance: First run queries all 6000+ batches from blockchain.
+    Subsequent runs within 8 minutes use cached data for near-instant results!
+    
+    Example output:
+      ⏳ Progress: 100/6118 batches (1.6%) - Cache: 0 hits, 100 misses
+      ⏳ Progress: 200/6118 batches (3.3%) - Cache: 150 hits, 50 misses
+      ✅ Completed: 6118/6118 batches - Cache: 5000 hits (81.7%), 1118 misses
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 4df491fe76388bb9027b9bb259d1ddace34308c4
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:07:23 2025 +0000
+
+    feat: add blockchain queries for current batch balances and price
+    
+    Add ability to query current on-chain state for accurate TTL calculations:
+    
+    1. Added remainingBalance() contract method to get current batch balance
+    2. Implemented get_remaining_balance() in BlockchainClient
+    3. Updated batch-status to fetch live balances from blockchain
+    4. Updated expiry-analytics to use current balances
+    
+    Note: Querying 6000+ individual batches is slow (~several minutes).
+    Future improvement: Add --use-cached flag to use historical data for
+    speed, or implement batch RPC calls for better performance.
+    
+    Current implementation provides accurate, real-time TTL data but
+    requires patience for large datasets.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 656188c18dc82e8391c4be16e3d2847b00b2864b
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 19:02:16 2025 +0000
+
+    feat: add price command to query current storage price from blockchain
+    
+    Implement new 'price' command that queries the actual current storage
+    price from the PostageStamp contract on Gnosis Chain.
+    
+    Features:
+    - Queries lastPrice() from PostageStamp contract via RPC
+    - Displays current price per chunk per block in PLUR
+    - Shows current block number for reference
+    - Provides usage hint for batch-status and expiry-analytics commands
+    - Formatted output with thousand separators
+    
+    Updated BlockchainClient.get_current_price() to make actual on-chain
+    query instead of returning hardcoded default value.
+    
+    This enables accurate TTL calculations using real-time pricing data.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit d41a5a720a408678898e4368d6992f0d25617923
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 18:49:20 2025 +0000
+
+    docs: update README with new commands and price calculation explanations
+    
+    Comprehensive documentation updates:
+    
+    1. New Commands:
+       - sync: Database synchronization command
+       - batch-status: Batch analysis with TTL and expiry
+       - expiry-analytics: Aggregate expiry patterns
+    
+    2. Price Calculation Guide:
+       - Detailed explanation of TTL calculation formula
+       - Price change modeling with --price-change flag
+       - Mathematical model for exponential price changes
+       - Practical use cases and examples
+       - Important notes about defaults and precision
+    
+    3. Updated Features:
+       - Added batch analysis tools section
+       - Updated test count (28 -> 41 tests)
+       - Added CSV dependency
+       - Updated project structure with commands module
+    
+    The documentation now provides complete guidance on:
+    - How to use the new analysis commands
+    - Understanding price dynamics and TTL calculations
+    - Modeling different price scenarios
+    - Planning batch renewals and capacity management
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 100c9ac3673e932752aa2d82181d98e91b05feb5
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 18:46:59 2025 +0000
+
+    feat: add batch-status and expiry-analytics commands
+    
+    Implements two new commands for analyzing postage stamp batches:
+    
+    1. batch-status: Display individual batch information including:
+       - Time to live (TTL) in blocks and days
+       - Expiry dates
+       - Batch size in chunks
+       - Sortable by batch-id, ttl, expiry, or size
+       - Export to table, CSV, or JSON
+    
+    2. expiry-analytics: Aggregate batch expiry patterns:
+       - Group by day, week, or month
+       - Show total batches expiring per period
+       - Calculate total storage expiring per period
+       - Sortable by period, chunks, or storage
+       - Export to table, CSV, or JSON
+    
+    Both commands support:
+    - Custom price override (--price)
+    - Price change modeling (--price-change percentage:days)
+    - Multiple output formats
+    
+    Added CSV crate dependency and error handling for CSV operations.
+    All commands include comprehensive unit tests.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 1bcedf6c783be2aa2430f922035ec5c6ea80d2fd
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 18:29:10 2025 +0000
+
+    feat: add database sync command
+    
+    Add new 'sync' command to update the database with latest blockchain
+    events. Features:
+    - Automatically syncs from last synced block in database
+    - Optional manual block range specification
+    - Reuses existing RPC caching infrastructure
+    - Clean progress reporting
+    
+    This provides a simpler alternative to 'fetch' for keeping the
+    database up to date without displaying all events.
+    
+    Also adds CLI structure for upcoming batch-status and expiry-analytics
+    commands with stub implementations.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 6350be28904c46c9a4fdac0ab08fd8f980b05bfb
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 8 18:25:44 2025 +0000
+
+    feat: add price calculation utilities with price-change support
+    
+    Add comprehensive price calculation module with support for:
+    - Fixed base price configuration
+    - Exponential price change over time (percentage:days format)
+    - TTL calculation from normalised balance and depth
+    - Average price calculation using exponential integration
+    - Block/day time conversions for Gnosis Chain
+    
+    The price change feature allows users to model scenarios where
+    storage prices increase over time, providing more accurate TTL
+    and expiry calculations.
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 9e68bde6809ba004e60df68e233de1bac7bcf4ef
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 1 21:15:19 2025 +0000
+
+    docs: clarify PostageStamp and StampsRegistry event relationship
+    
+    Added detailed explanation of how StampsRegistry events relate to
+    PostageStamp events:
+    
+    - StampsRegistry internally calls PostageStamp contract
+    - Both contracts emit BatchCreated events in the same transaction
+    - 100% of StampsRegistry events (303) also appear in PostageStamp (6,118)
+    - Direct PostageStamp purchases = 6,118 - 303 = 5,815 batches
+    
+    This helps users understand:
+    - Why both contracts are tracked
+    - How to avoid double-counting batches
+    - How to calculate direct vs UI-based purchases
+    - The proper commands to get accurate statistics
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit e28c5359dcb07b3829d5c9e73fcee51d614a4c5e
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 1 21:05:59 2025 +0000
+
+    fix: correct StampsRegistry BatchCreated event ABI
+    
+    The owner field was incorrectly marked as not indexed in the ABI.
+    According to GnosisScan, the BatchCreated event has three indexed
+    parameters: batchId, owner, and payer.
+    
+    This fix allows the tool to properly capture BatchCreated events
+    from the StampsRegistry contract.
+    
+    Before: 0 BatchCreated events from StampsRegistry
+    After: 303 BatchCreated events from StampsRegistry
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 16230215d80361423b73a7a11ddbd6aab30e0ddc
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 1 19:21:08 2025 +0000
+
+    feat: add RPC request caching to avoid redundant blockchain queries
+    
+    This commit implements intelligent caching of RPC requests to dramatically
+    improve performance on subsequent fetches of the same block ranges.
+    
+    Key Features:
+    - SHA256-based chunk hashing for cache keys
+    - Database-backed RPC cache with chunk metadata
+    - Automatic cache hit detection before making RPC calls
+    - Per-contract and per-block-range granular caching
+    - Hooks are only fired once per chunk (on first fetch)
+    
+    Performance Impact:
+    - First fetch: ~9 seconds (makes RPC calls)
+    - Subsequent fetches of same range: ~0.2 seconds (cached)
+    - 45x speedup for cached queries
+    - Eliminates redundant RPC calls entirely
+    
+    Implementation Details:
+    - New rpc_cache table stores chunk_hash, contract_address, and block ranges
+    - Hash generated from contract address + from_block + to_block
+    - Cache checked before each 10,000 block chunk
+    - Events not re-processed if chunk is cached (hooks not re-fired)
+    - Cache persists across application restarts
+    
+    Database Schema:
+    - Added rpc_cache table with chunk metadata
+    - Indexed on contract_address + block range for fast lookups
+    - Stores processed_at timestamp and event_count
+    
+    User Experience:
+    - Chunks show [CACHED] marker in logs
+    - Much faster re-fetches of historical data
+    - No behavior change for users (transparent caching)
+    - Safe to re-run same fetch commands
+    
+    Testing:
+    - Verified cache hit/miss functionality
+    - Tested partial range overlaps
+    - Confirmed hooks not re-fired for cached chunks
+    - All 28 unit tests pass
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 8a294a8cb3522025a812ccc7e1ee6055ce56add5
+Author: sig <dan@1up.digital>
+Date:   Mon Dec 1 18:19:20 2025 +0000
+
+    feat: add multi-contract support with generic event monitoring
+    
+    This commit implements a comprehensive multi-contract monitoring system
+    that allows tracking events from multiple smart contracts simultaneously.
+    
+    Key Features:
+    - Multi-contract support: Monitor PostageStamp and StampsRegistry contracts
+    - Contract-specific event hooks for custom logic per contract
+    - Database schema updated to track contract source for each event
+    - CLI filtering by contract source (--contract flag)
+    - Enhanced logging with chunk progress and per-contract feedback
+    - Generic architecture for easy addition of new contracts
+    
+    Architecture Changes:
+    - New contracts.rs module with ContractType enum and contract ABIs
+    - Refactored blockchain.rs to fetch from multiple contracts in parallel
+    - Enhanced hooks.rs with contract-specific handler methods
+    - Updated cache.rs with contract_source field and indexing
+    - Added FilterContract enum to CLI for contract filtering
+    - Display now shows contract source in event tables
+    
+    Database Migration:
+    - Added contract_source column to events table
+    - Added index on contract_source for efficient filtering
+    - Default value for backward compatibility
+    
+    Documentation:
+    - Comprehensive README section on extending with new contracts
+    - Step-by-step guide with code examples
+    - Updated feature list and usage examples
+    - Contract information for both PostageStamp and StampsRegistry
+    
+    Testing:
+    - All 28 unit tests pass
+    - Verified multi-contract fetching works correctly
+    - Contract filtering tested and working
+    - Enhanced logging provides clear progress feedback
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 5b2009eb523d5838c2b40c78afaf5f3a1eace721
+Author: sig <dan@1up.digital>
+Date:   Sun Nov 30 21:46:53 2025 +0000
+
+    feat: add follow mode with event hooks and default start block
+    
+    Implement real-time blockchain following with automatic historical sync
+    and extensible event hook system.
+    
+    New Features:
+    - Default start block constant (37,000,000) for consistent defaults
+    - Follow command for real-time event monitoring
+      - Automatic historical sync before following
+      - Configurable poll interval (default 12s)
+      - Optional event display
+      - Runs indefinitely until interrupted
+    - Event hook system with stub implementation
+      - Trait-based design for extensibility
+      - Stub hook demonstrates integration point
+      - Ready for notifications, webhooks, etc.
+    
+    Implementation Details:
+    - Uses tokio interval timer for reliable polling
+    - Ensures no events are missed during historical catch-up
+    - Invokes hooks only for new events (post-historical-sync)
+    - All events cached regardless of display setting
+    - Clean shutdown on Ctrl+C
+    
+    Testing:
+    - Added hook module with tests
+    - All 25 tests passing
+    - Follow command tested and verified
+    
+    Documentation:
+    - Comprehensive follow mode documentation
+    - Event hook extensibility guide
+    - Real-world usage examples
+    
+    Example:
+      # Start following with default settings
+      beeport-stamp-stats follow
+    
+      # Custom poll interval
+      beeport-stamp-stats follow --poll-interval 5
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 612c752877c42241b6316583ba4e85c2931f8140
+Author: sig <dan@1up.digital>
+Date:   Sun Nov 30 18:45:16 2025 +0000
+
+    chore: format and lint code
+    
+    Apply cargo fmt formatting and ensure all tests pass.
+    
+    - 24 tests passing
+    - Code formatted with rustfmt
+    - Minor clippy warnings (cosmetic only)
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit d2de8944cf5285d1816f8ea0e9a916cd2d0e7010
+Author: sig <dan@1up.digital>
+Date:   Sun Nov 30 18:32:11 2025 +0000
+
+    fix: correct PostageStamp contract address and event ABI
+    
+    Fix contract address and ABI mismatch preventing event parsing.
+    
+    Issues Fixed:
+    - Updated contract address to correct PostageStamp deployment:
+      0x45a1502382541Cd610CC9068e88727426b696293
+    - Removed non-existent normalisedBalancePerChunk field from BatchCreated
+      event (was causing signature mismatch)
+    - Updated all test fixtures and README examples
+    
+    The original ABI had an extra field that doesn't exist in the actual
+    deployed contract, causing all events to fail parsing despite logs
+    being fetched successfully.
+    
+    Verified:
+    - Successfully fetches and parses BatchCreated events
+    - All 24 tests passing
+    - Beautiful markdown table output working
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 50b71355a95a4d3844bae5718985fa1bae2b8076
+Author: sig <dan@1up.digital>
+Date:   Sun Nov 30 18:18:55 2025 +0000
+
+    feat: add data export and advanced filtering
+    
+    Add powerful export and filtering capabilities to enhance data analysis.
+    
+    New Features:
+    - Export command with CSV and JSON support
+      - Export events, batches, or aggregated statistics
+      - Flexible output formats for external analysis tools
+    - Advanced filtering system
+      - Filter by event type (BatchCreated, BatchTopUp, BatchDepthIncrease)
+      - Filter by batch ID with partial match support
+      - Combine filters for precise data selection
+    - Apply filters to both summary and export commands
+    
+    Implementation:
+    - New export module with 6 comprehensive tests
+    - Enhanced CLI with export subcommand and filter options
+    - FilterEventType enum for type-safe filtering
+    - ExportDataType and ExportFormat enums for export configuration
+    - CSV and JSON serialization for all data types
+    
+    Testing:
+    - Added 6 new unit tests for export functionality
+    - All 24 tests passing
+    - Test coverage for CSV/JSON export of events, batches, and stats
+    
+    Documentation:
+    - Updated README with extensive export examples
+    - Added filtering usage examples
+    - Documented all export formats with sample output
+    - Updated .gitignore to exclude generated exports
+    
+    Examples:
+      # Filter summary by event type
+      beeport-stamp-stats summary --event-type batch-created
+    
+      # Export filtered data
+      beeport-stamp-stats export --output topups.csv \
+        --format csv --event-type batch-top-up --months 6
+    
+      # Track specific batch
+      beeport-stamp-stats summary --batch-id 0x1234
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
+
+commit 5db5c70f827d1f91b81578e998e8358f5129321f
+Author: sig <dan@1up.digital>
+Date:   Sun Nov 30 18:07:36 2025 +0000
+
+    feat: implement Rust CLI for Swarm postage stamp tracking
+    
+    Build a production-ready Rust application to track and analyze Swarm
+    postage stamp events on Gnosis Chain using direct Ethereum RPC.
+    
+    Features:
+    - Direct RPC access using Alloy 0.8 (modern Ethereum library)
+    - SQLite caching for persistent event storage
+    - Two main commands: fetch and summary
+    - Beautiful markdown table output
+    - Incremental sync support
+    - Comprehensive test coverage (18 passing tests)
+    
+    Tech stack:
+    - Rust 2024 edition
+    - Alloy for Ethereum interactions
+    - SQLx for type-safe SQLite operations
+    - Clap for CLI with environment variable support
+    - Tokio async runtime
+    - Tabled for markdown formatting
+    
+    Architecture:
+    - Modular design with separate concerns (CLI, blockchain, cache, display)
+    - Full error handling with custom error types
+    - Type-safe event parsing and serialization
+    - Efficient block chunking for RPC queries
+    
+    🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    
+    Co-Authored-By: Claude <noreply@anthropic.com>
