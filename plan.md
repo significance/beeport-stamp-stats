@@ -236,26 +236,27 @@ WHERE event_type = 'BatchCreated'
 
 ## 📚 Testing Strategy
 
-### Test Database Convention
-**IMPORTANT:** Always use PostgreSQL for testing, never SQLite
+### Database Convention
+**IMPORTANT:** Always use PostgreSQL database `beeport1m`
 
-- **Database name:** `beeport4_testing`
-- **Source database:** `beeport4` (production/main database)
-- **Reset procedure:** Always recreate from `beeport4` at start of test run
+- **Database name:** `beeport1m` (ONLY database to use)
+- **Never delete:** Always ASK user for confirmation before any DROP DATABASE operations
+- **Backup first:** If user confirms deletion, suggest backing up first
 
 **User Confirmation Required Before:**
-1. Copying `beeport4` to `beeport4_testing` (ask first!)
-2. Creating fresh empty database if `beeport4` doesn't exist
+1. **ANY DROP DATABASE operation** - ALWAYS ask first, suggest backup
+2. Deleting or truncating data from `beeport1m`
+3. Any destructive operations on the database
 
-**Standard setup:**
+**Standard usage:**
 ```bash
-# Drop and recreate testing database from production data
-psql -c "DROP DATABASE IF EXISTS beeport4_testing;"
-psql -c "CREATE DATABASE beeport4_testing TEMPLATE beeport4;"
+# Normal operation - always use beeport1m
+./target/release/beeport-stamp-stats fetch
+./target/release/beeport-stamp-stats sync
 
-# Or create fresh empty if source doesn't exist
-psql -c "DROP DATABASE IF EXISTS beeport4_testing;"
-psql -c "CREATE DATABASE beeport4_testing;"
+# Database is configured in config.yaml:
+database:
+  path: "postgresql://localhost/beeport1m"
 ```
 
 ### Verification Checklist
@@ -443,7 +444,6 @@ If starting a new session:
 ```bash
 # Fetch events for a block range
 ./target/release/beeport-stamp-stats \
-  --database-url "postgresql://localhost/beeport4" \
   fetch --from-block 41105199 --to-block 41106199
 
 # Follow mode (real-time monitoring)

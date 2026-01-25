@@ -13,17 +13,17 @@ CREATE TABLE IF NOT EXISTS rpc_rate_limits (
     rpc_url TEXT NOT NULL UNIQUE,
 
     -- Rate limit information
-    discovered_rate_limit REAL NOT NULL,
+    discovered_rate_limit DOUBLE PRECISION NOT NULL,
     rate_limit_strategy TEXT NOT NULL, -- 'manual', 'adaptive', 'aggressive'
 
     -- Statistics
     total_requests BIGINT NOT NULL DEFAULT 0,
     rate_limit_errors BIGINT NOT NULL DEFAULT 0,
-    success_rate REAL NOT NULL DEFAULT 1.0,
+    success_rate DOUBLE PRECISION NOT NULL DEFAULT 1.0,
 
     -- Measurements
-    measured_rps REAL,
-    avg_response_time_ms REAL,
+    measured_rps DOUBLE PRECISION,
+    avg_response_time_ms DOUBLE PRECISION,
 
     -- Timestamps
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

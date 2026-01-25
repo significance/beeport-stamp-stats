@@ -20,6 +20,9 @@ pub enum StampError {
     #[error("Parse error: {0}")]
     Parse(String),
 
+    #[error("Data unavailable (pruned): {0}")]
+    DataUnavailable(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

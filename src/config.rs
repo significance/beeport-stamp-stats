@@ -175,6 +175,10 @@ pub struct RateLimitingConfig {
     /// Aggressive strategy configuration
     #[serde(default)]
     pub aggressive: AggressiveStrategyConfig,
+
+    /// Recovery configuration for automatic rate limit recovery
+    #[serde(default)]
+    pub recovery: RecoveryConfig,
 }
 
 fn default_max_concurrent() -> usize {
@@ -193,6 +197,7 @@ impl Default for RateLimitingConfig {
             stats_interval_seconds: default_stats_interval(),
             adaptive: AdaptiveStrategyConfig::default(),
             aggressive: AggressiveStrategyConfig::default(),
+            recovery: RecoveryConfig::default(),
         }
     }
 }
@@ -207,6 +212,10 @@ pub struct AdaptiveStrategyConfig {
     /// Maximum rate limit (safety cap)
     #[serde(default = "default_adaptive_max")]
     pub max_rps: f64,
+
+    /// Minimum rate limit (floor - prevents deadlock)
+    #[serde(default = "default_adaptive_min")]
+    pub min_rps: f64,
 
     /// Ramp up multiplier (e.g., 1.2 = 20% increase)
     #[serde(default = "default_adaptive_ramp_up")]
@@ -229,6 +238,10 @@ fn default_adaptive_max() -> f64 {
     1000.0
 }
 
+fn default_adaptive_min() -> f64 {
+    0.5
+}
+
 fn default_adaptive_ramp_up() -> f64 {
     1.2
 }
@@ -246,6 +259,7 @@ impl Default for AdaptiveStrategyConfig {
         Self {
             start_rps: default_adaptive_start(),
             max_rps: default_adaptive_max(),
+            min_rps: default_adaptive_min(),
             ramp_up_factor: default_adaptive_ramp_up(),
             back_off_factor: default_adaptive_back_off(),
             ramp_up_threshold: default_adaptive_ramp_threshold(),
@@ -287,6 +301,53 @@ impl Default for AggressiveStrategyConfig {
             start_rps: default_aggressive_start(),
             min_rps: default_aggressive_min(),
             back_off_factor: default_aggressive_back_off(),
+        }
+    }
+}
+
+/// Recovery configuration for automatic rate limit recovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryConfig {
+    /// How long to wait after last 429 before attempting recovery (seconds)
+    #[serde(default = "default_cool_down_period")]
+    pub cool_down_period_secs: u64,
+
+    /// Target rate to reset to after cool-down (requests per second)
+    #[serde(default = "default_min_healthy_rate")]
+    pub min_healthy_rate: f64,
+
+    /// Factor to multiply rate by during gradual recovery (e.g., 1.05 = 5% increase)
+    #[serde(default = "default_gradual_recovery_factor")]
+    pub gradual_recovery_factor: f64,
+
+    /// How often to check for recovery opportunities (seconds)
+    #[serde(default = "default_recovery_check_interval")]
+    pub recovery_check_interval_secs: u64,
+}
+
+fn default_cool_down_period() -> u64 {
+    60
+}
+
+fn default_min_healthy_rate() -> f64 {
+    5.0
+}
+
+fn default_gradual_recovery_factor() -> f64 {
+    1.05
+}
+
+fn default_recovery_check_interval() -> u64 {
+    30
+}
+
+impl Default for RecoveryConfig {
+    fn default() -> Self {
+        Self {
+            cool_down_period_secs: default_cool_down_period(),
+            min_healthy_rate: default_min_healthy_rate(),
+            gradual_recovery_factor: default_gradual_recovery_factor(),
+            recovery_check_interval_secs: default_recovery_check_interval(),
         }
     }
 }
@@ -565,8 +626,7 @@ impl AppConfig {
         for url in self.rpc.urls() {
             if !url.starts_with("http://") && !url.starts_with("https://") {
                 return Err(format!(
-                    "Invalid RPC URL '{}': must start with http:// or https://",
-                    url
+                    "Invalid RPC URL '{url}': must start with http:// or https://"
                 ));
             }
         }

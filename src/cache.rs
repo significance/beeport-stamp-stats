@@ -1329,6 +1329,7 @@ impl Cache {
         }
     }
     /// Store or update RPC rate limit information
+    #[allow(clippy::too_many_arguments)]
     pub async fn upsert_rpc_rate_limit(
         &self,
         rpc_url: &str,
@@ -1436,6 +1437,7 @@ impl Cache {
     }
 
     /// Get all RPC rate limit statistics
+    #[allow(dead_code)]
     pub async fn get_all_rpc_stats(&self) -> Result<Vec<RpcRateLimitStats>> {
         let stats = match &self.pool {
             DatabasePool::Postgres(pool) => {
@@ -1494,6 +1496,7 @@ pub struct MigrationInfo {
 
 /// RPC rate limit statistics
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct RpcRateLimitStats {
     pub rpc_url: String,
     pub discovered_rate_limit: f64,

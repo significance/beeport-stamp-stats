@@ -17,6 +17,7 @@ pub mod export;
 pub mod hooks;
 pub mod price;
 pub mod rate_limiter;
+pub mod rate_limiter_v2;
 pub mod retry;
 pub mod rpc_scheduler;
 pub mod types;
