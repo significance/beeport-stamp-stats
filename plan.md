@@ -1,19 +1,41 @@
 # Beeport TX Stats - Project Plan
 
-**Last Updated:** 2026-01-19
+**Last Updated:** 2026-01-25
 
 ---
 
 ## 📍 Current Status
 
-**Project State:** ✅ Production Ready + TRUE Parallel Execution Working
+**Branch:** `feat/improve-retrieval-efficiency`
+**Goal:** Improve retrieval efficiency for postage batch data collection
+**Database:** `beeport3m` (PostgreSQL, configured in config.yaml)
 
-**Recent Work:** Fixed blocking issue - parallel RPC execution now functional (2026-01-19)
+**Project State:** 🚧 Token Bucket Rate Limiter Implemented - Testing
+
+**Recent Work:** Implemented token bucket rate limiter with automatic recovery (2026-01-25)
+- ✅ New `rate_limiter_v2.rs` with token bucket algorithm
+- ✅ Automatic recovery after cool-down period (no more deadlocks at 0 req/s)
+- ✅ Cached rate limits persist to database (`rpc_rate_limits` table)
+- ✅ Background recovery tasks for gradual rate increase
+- ✅ Fixed PostgreSQL migration to use DOUBLE PRECISION (f64 compatible)
+- 🚧 Needs production testing with long-running fetch operations
+
+**Previous Work:** Parallel RPC execution (2026-01-19)
 - ✅ Identified problem: execute_many() existed but was never used
 - ✅ Refactored blockchain client to use three-phase approach (collect, fetch parallel, process)
 - ✅ Verified 4 RPCs fetch 4 chunks truly in parallel (not sequentially)
 - ✅ 100% backward compatibility with single RPC mode
 - ✅ Organized documentation into docs/ folder
+
+**Key Files Changed:**
+- `src/rate_limiter_v2.rs` - New token bucket implementation
+- `src/rpc_scheduler.rs` - Uses new rate limiter
+- `migrations_postgres/20260119000009_add_rpc_rate_limits_table.sql` - Rate limit persistence
+
+**Next Steps:**
+1. Run extended fetch operation to verify stability
+2. Monitor rate limiter behavior under 429 errors
+3. Verify recovery mechanism works as expected
 
 All core features implemented and tested:
 - ✅ Postage stamp events tracking (PostageStamp, StampsRegistry contracts)
