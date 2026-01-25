@@ -1011,6 +1011,32 @@ Storage prices on decentralized networks can be volatile. Understanding how pric
 - Both events fire in sequence (PostageStamp first, then StampsRegistry)
 - They share the same transaction hash and block number but have different log indices
 
+**Set Relationship (Proper Subset):**
+```
+StampsRegistry batches ⊂ PostageStamp batches
+```
+
+This is a **proper subset** relationship, meaning:
+- Every StampsRegistry batch is also a PostageStamp batch (A ⊆ B)
+- But the sets are NOT equal - PostageStamp has batches that StampsRegistry doesn't (A ≠ B)
+- Combined: A ⊂ B (proper subset, also written A ⊊ B)
+
+The sets are **intersecting** (not disjoint). In fact, since StampsRegistry is a proper subset, the intersection equals the entire StampsRegistry set:
+```
+StampsRegistry ∩ PostageStamp = StampsRegistry
+```
+
+To count batches created directly on PostageStamp (bypassing StampsRegistry):
+
+```
+direct_PostageStamp_batches = PostageStamp_count - StampsRegistry_count
+```
+
+This works because:
+1. Every StampsRegistry batch triggers exactly one PostageStamp event (same batchId)
+2. Transactions are atomic - if PostageStamp fails, the whole tx reverts
+3. BatchIds are unique (derived from `keccak256(abi.encode(address, nonce))`)
+
 **Event Counting:**
 - **Total PostageStamp BatchCreated events:** 6,118
 - **Total StampsRegistry BatchCreated events:** 303
@@ -1028,6 +1054,18 @@ beeport-stamp-stats summary --contract stamps-registry --event-type batch-create
 # Direct batches (created directly on PostageStamp, not via StampsRegistry)
 # This requires filtering: PostageStamp count minus StampsRegistry count = 5,815
 ```
+
+**CLI Filter Caveat:**
+
+Note that the `--contract` filter in the `summary` command filters **events only**, not the "Unique Batches" count. This means:
+```bash
+beeport-stamp-stats summary --contract stamps-registry
+```
+Will show:
+- Event counts filtered to StampsRegistry only (correct)
+- "Unique Batches" count from ALL contracts (not filtered)
+
+This is because batches are aggregated from all event sources in the database. To get accurate per-contract batch counts, use the event counts (e.g., BatchCreated count) rather than the "Unique Batches" field when filtering by contract.
 
 **Why track both?**
 - **PostageStamp events:** Show all batches created (complete dataset)

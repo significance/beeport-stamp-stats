@@ -90,8 +90,8 @@ contracts:
 
   - name: "StampsRegistry"
     contract_type: "StampsRegistry"
-    address: "0xCfC2FfF779E572990304bc5Da857087a3e576dd0"
-    deployment_block: 28165570
+    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+    deployment_block: 39963208
     active: true
 
 storage_incentives_contracts:
