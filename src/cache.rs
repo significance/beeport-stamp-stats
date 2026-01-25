@@ -2324,6 +2324,7 @@ impl Cache {
         Ok(count as u64)
     }
 
+    /// Store or update RPC rate limit information
     #[allow(clippy::too_many_arguments)]
     pub async fn upsert_rpc_rate_limit(
         &self,
@@ -2489,6 +2490,19 @@ pub struct MigrationInfo {
     pub installed_on: String,
 }
 
+/// RPC rate limit statistics
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct RpcRateLimitStats {
+    pub rpc_url: String,
+    pub discovered_rate_limit: f64,
+    pub rate_limit_strategy: String,
+    pub total_requests: i64,
+    pub rate_limit_errors: i64,
+    pub success_rate: f64,
+    pub measured_rps: Option<f64>,
+    pub seconds_since_update: f64,
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2613,18 +2627,4 @@ mod tests {
         cache.store_events(&events).await.unwrap();
         assert_eq!(cache.get_last_block().await.unwrap(), Some(2000));
     }
-}
-
-/// RPC rate limit statistics
-#[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
-pub struct RpcRateLimitStats {
-    pub rpc_url: String,
-    pub discovered_rate_limit: f64,
-    pub rate_limit_strategy: String,
-    pub total_requests: i64,
-    pub rate_limit_errors: i64,
-    pub success_rate: f64,
-    pub measured_rps: f64,
-    pub seconds_since_update: f64,
 }

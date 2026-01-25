@@ -3,6 +3,8 @@
 /// This module implements a sliding window rate limiter with adaptive discovery
 /// of each endpoint's rate limits. It tracks request patterns and automatically
 /// adjusts the rate limit based on successes and failures.
+///
+/// DEPRECATED: This module is replaced by rate_limiter_v2 with token bucket algorithm
 use crate::cache::Cache;
 use crate::config::{AdaptiveStrategyConfig, AggressiveStrategyConfig, RateLimitMode, RateLimitStrategyName};
 use crate::error::Result;
@@ -12,6 +14,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Adaptive rate limiter for a single RPC endpoint
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct AdaptiveRateLimiter {
     rpc_url: String,
@@ -22,6 +25,7 @@ pub struct AdaptiveRateLimiter {
 
 /// Rate limit configuration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct RateLimitConfig {
     /// Manual rate limit (if specified in config)
     manual_limit: Option<f64>,
@@ -35,6 +39,7 @@ struct RateLimitConfig {
 
 /// Rate limit state tracking
 #[derive(Debug)]
+#[allow(dead_code)]
 struct RateLimitState {
     /// Sliding window of recent requests
     recent_requests: VecDeque<Instant>,
@@ -56,6 +61,7 @@ struct RateLimitState {
 }
 
 /// Rate limiting strategy
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum RateLimitStrategy {
@@ -79,6 +85,7 @@ enum RateLimitStrategy {
     },
 }
 
+#[allow(dead_code)]
 impl AdaptiveRateLimiter {
     /// Create a new rate limiter for an endpoint
     pub async fn new(
@@ -393,6 +400,7 @@ impl AdaptiveRateLimiter {
 }
 
 /// Rate limit statistics
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RateLimitStats {
