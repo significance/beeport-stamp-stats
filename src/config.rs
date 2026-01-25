@@ -43,13 +43,313 @@ pub struct AppConfig {
 
     /// Retry configuration
     pub retry: RetryConfig,
+
+    /// Rate limiting configuration (optional)
+    #[serde(default)]
+    pub rate_limiting: RateLimitingConfig,
 }
 
 /// RPC configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RpcConfig {
+    /// Single URL (legacy format - mutually exclusive with endpoints)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Multiple endpoints with rate limiting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoints: Option<Vec<RpcEndpointConfig>>,
+}
+
+impl RpcConfig {
+    /// Get all RPC URLs from config
+    pub fn urls(&self) -> Vec<String> {
+        if let Some(ref endpoints) = self.endpoints {
+            endpoints.iter().map(|e| e.url.clone()).collect()
+        } else if let Some(ref url) = self.url {
+            vec![url.clone()]
+        } else {
+            vec!["https://rpc.gnosis.gateway.fm".to_string()]
+        }
+    }
+
+    /// Get primary URL (first endpoint) - for backwards compatibility
+    pub fn primary_url(&self) -> String {
+        if let Some(ref endpoints) = self.endpoints {
+            endpoints.first().map(|e| e.url.clone())
+                .unwrap_or_else(|| "https://rpc.gnosis.gateway.fm".to_string())
+        } else if let Some(ref url) = self.url {
+            url.clone()
+        } else {
+            "https://rpc.gnosis.gateway.fm".to_string()
+        }
+    }
+
+    /// Set the URL (for CLI overrides) - clears endpoints and sets single URL
+    pub fn set_url(&mut self, new_url: String) {
+        self.url = Some(new_url);
+        self.endpoints = None;
+    }
+
+    /// Get all endpoint configurations
+    pub fn endpoints(&self) -> Vec<RpcEndpointConfig> {
+        if let Some(ref endpoints) = self.endpoints {
+            endpoints.clone()
+        } else if let Some(ref url) = self.url {
+            vec![RpcEndpointConfig {
+                url: url.clone(),
+                rate_limit: None,
+                priority: 0,
+                weight: 1,
+            }]
+        } else {
+            vec![RpcEndpointConfig {
+                url: "https://rpc.gnosis.gateway.fm".to_string(),
+                rate_limit: None,
+                priority: 0,
+                weight: 1,
+            }]
+        }
+    }
+}
+
+/// Individual RPC endpoint configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RpcEndpointConfig {
     /// RPC endpoint URL
     pub url: String,
+
+    /// Rate limit strategy (optional)
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitMode>,
+
+    /// Priority (0 = highest, for paid RPCs)
+    #[serde(default)]
+    pub priority: u8,
+
+    /// Weight for weighted round-robin (higher = selected more often)
+    #[serde(default = "default_weight")]
+    pub weight: u32,
+}
+
+fn default_weight() -> u32 {
+    1
+}
+
+/// Rate limit configuration mode
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RateLimitMode {
+    /// Manual rate limit (fixed value)
+    Manual(f64),
+    /// Named strategy
+    Strategy(RateLimitStrategyName),
+}
+
+/// Rate limiting strategy name
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum RateLimitStrategyName {
+    Adaptive,
+    Aggressive,
+}
+
+/// Rate limiting global configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitingConfig {
+    /// Maximum concurrent requests across all RPCs
+    #[serde(default = "default_max_concurrent")]
+    pub max_concurrent: usize,
+
+    /// Health check interval in seconds (0 = disabled)
+    #[serde(default)]
+    pub health_check_interval_seconds: u64,
+
+    /// Log rate limit stats every N seconds (0 = disabled)
+    #[serde(default = "default_stats_interval")]
+    pub stats_interval_seconds: u64,
+
+    /// Adaptive strategy configuration
+    #[serde(default)]
+    pub adaptive: AdaptiveStrategyConfig,
+
+    /// Aggressive strategy configuration
+    #[serde(default)]
+    pub aggressive: AggressiveStrategyConfig,
+
+    /// Recovery configuration for automatic rate limit recovery
+    #[serde(default)]
+    pub recovery: RecoveryConfig,
+}
+
+fn default_max_concurrent() -> usize {
+    100
+}
+
+fn default_stats_interval() -> u64 {
+    30
+}
+
+impl Default for RateLimitingConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: default_max_concurrent(),
+            health_check_interval_seconds: 0,
+            stats_interval_seconds: default_stats_interval(),
+            adaptive: AdaptiveStrategyConfig::default(),
+            aggressive: AggressiveStrategyConfig::default(),
+            recovery: RecoveryConfig::default(),
+        }
+    }
+}
+
+/// Adaptive rate limiting strategy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveStrategyConfig {
+    /// Starting rate limit (requests per second)
+    #[serde(default = "default_adaptive_start")]
+    pub start_rps: f64,
+
+    /// Maximum rate limit (safety cap)
+    #[serde(default = "default_adaptive_max")]
+    pub max_rps: f64,
+
+    /// Minimum rate limit (floor - prevents deadlock)
+    #[serde(default = "default_adaptive_min")]
+    pub min_rps: f64,
+
+    /// Ramp up multiplier (e.g., 1.2 = 20% increase)
+    #[serde(default = "default_adaptive_ramp_up")]
+    pub ramp_up_factor: f64,
+
+    /// Back off multiplier on rate limit error (e.g., 0.5 = 50% decrease)
+    #[serde(default = "default_adaptive_back_off")]
+    pub back_off_factor: f64,
+
+    /// Number of successes before ramping up
+    #[serde(default = "default_adaptive_ramp_threshold")]
+    pub ramp_up_threshold: u32,
+}
+
+fn default_adaptive_start() -> f64 {
+    10.0
+}
+
+fn default_adaptive_max() -> f64 {
+    1000.0
+}
+
+fn default_adaptive_min() -> f64 {
+    0.5
+}
+
+fn default_adaptive_ramp_up() -> f64 {
+    1.2
+}
+
+fn default_adaptive_back_off() -> f64 {
+    0.5
+}
+
+fn default_adaptive_ramp_threshold() -> u32 {
+    100
+}
+
+impl Default for AdaptiveStrategyConfig {
+    fn default() -> Self {
+        Self {
+            start_rps: default_adaptive_start(),
+            max_rps: default_adaptive_max(),
+            min_rps: default_adaptive_min(),
+            ramp_up_factor: default_adaptive_ramp_up(),
+            back_off_factor: default_adaptive_back_off(),
+            ramp_up_threshold: default_adaptive_ramp_threshold(),
+        }
+    }
+}
+
+/// Aggressive rate limiting strategy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggressiveStrategyConfig {
+    /// Starting rate limit (requests per second) - high initial value
+    #[serde(default = "default_aggressive_start")]
+    pub start_rps: f64,
+
+    /// Minimum rate limit (floor)
+    #[serde(default = "default_aggressive_min")]
+    pub min_rps: f64,
+
+    /// Back off multiplier on rate limit error (e.g., 0.7 = 30% decrease)
+    #[serde(default = "default_aggressive_back_off")]
+    pub back_off_factor: f64,
+}
+
+fn default_aggressive_start() -> f64 {
+    100.0
+}
+
+fn default_aggressive_min() -> f64 {
+    1.0
+}
+
+fn default_aggressive_back_off() -> f64 {
+    0.7
+}
+
+impl Default for AggressiveStrategyConfig {
+    fn default() -> Self {
+        Self {
+            start_rps: default_aggressive_start(),
+            min_rps: default_aggressive_min(),
+            back_off_factor: default_aggressive_back_off(),
+        }
+    }
+}
+
+/// Recovery configuration for automatic rate limit recovery
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryConfig {
+    /// How long to wait after last 429 before attempting recovery (seconds)
+    #[serde(default = "default_cool_down_period")]
+    pub cool_down_period_secs: u64,
+
+    /// Target rate to reset to after cool-down (requests per second)
+    #[serde(default = "default_min_healthy_rate")]
+    pub min_healthy_rate: f64,
+
+    /// Factor to multiply rate by during gradual recovery (e.g., 1.05 = 5% increase)
+    #[serde(default = "default_gradual_recovery_factor")]
+    pub gradual_recovery_factor: f64,
+
+    /// How often to check for recovery opportunities (seconds)
+    #[serde(default = "default_recovery_check_interval")]
+    pub recovery_check_interval_secs: u64,
+}
+
+fn default_cool_down_period() -> u64 {
+    60
+}
+
+fn default_min_healthy_rate() -> f64 {
+    5.0
+}
+
+fn default_gradual_recovery_factor() -> f64 {
+    1.05
+}
+
+fn default_recovery_check_interval() -> u64 {
+    30
+}
+
+impl Default for RecoveryConfig {
+    fn default() -> Self {
+        Self {
+            cool_down_period_secs: default_cool_down_period(),
+            min_healthy_rate: default_min_healthy_rate(),
+            gradual_recovery_factor: default_gradual_recovery_factor(),
+            recovery_check_interval_secs: default_recovery_check_interval(),
+        }
+    }
 }
 
 /// Database configuration
@@ -173,7 +473,8 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             rpc: RpcConfig {
-                url: "https://rpc.gnosis.gateway.fm".to_string(),
+                url: Some("https://rpc.gnosis.gateway.fm".to_string()),
+                endpoints: None,
             },
             database: DatabaseConfig {
                 path: "./stamp-cache.db".to_string(),
@@ -240,6 +541,7 @@ impl Default for AppConfig {
                 backoff_multiplier: 4,
                 extended_retry_wait_seconds: 300,
             },
+            rate_limiting: RateLimitingConfig::default(),
         }
     }
 }
@@ -320,12 +622,13 @@ impl AppConfig {
     ///
     /// Returns `Ok(())` if valid, or an error message describing the problem.
     pub fn validate(&self) -> Result<(), String> {
-        // Validate RPC URL format
-        if !self.rpc.url.starts_with("http://") && !self.rpc.url.starts_with("https://") {
-            return Err(format!(
-                "Invalid RPC URL '{}': must start with http:// or https://",
-                self.rpc.url
-            ));
+        // Validate RPC URLs format
+        for url in self.rpc.urls() {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return Err(format!(
+                    "Invalid RPC URL '{url}': must start with http:// or https://"
+                ));
+            }
         }
 
         // Validate database path is not empty

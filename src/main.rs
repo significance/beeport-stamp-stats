@@ -11,7 +11,10 @@ mod events;
 mod export;
 mod hooks;
 mod price;
+mod rate_limiter;
+mod rate_limiter_v2;
 mod retry;
+mod rpc_scheduler;
 mod types;
 
 use anyhow::Result;

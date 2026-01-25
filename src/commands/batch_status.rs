@@ -135,8 +135,7 @@ pub async fn execute(
             "stamps-registry" | "stampsregistry" => "StampsRegistry",
             _ => {
                 return Err(crate::error::StampError::Parse(format!(
-                    "Invalid contract filter '{}'. Use 'postage-stamp' or 'stamps-registry'",
-                    filter
+                    "Invalid contract filter '{filter}'. Use 'postage-stamp' or 'stamps-registry'"
                 )));
             }
         };

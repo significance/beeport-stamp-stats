@@ -1,0 +1,150 @@
+database:
+  path: "postgresql://localhost/beeport4_testing"
+
+rpc:
+  endpoints:
+    # FairDataSociety endpoint (user provided)
+    - url: "https://xdai.fairdatasociety.org"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Official Gnosis Chain RPC
+    - url: "https://rpc.gnosischain.com"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # dRPC - AI-powered load balancer
+    - url: "https://gnosis.drpc.org"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Ankr - Popular provider
+    - url: "https://rpc.ankr.com/gnosis"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # 1RPC - Privacy-focused
+    - url: "https://1rpc.io/gnosis"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # PublicNode - Community infrastructure
+    - url: "https://gnosis-rpc.publicnode.com"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # BlockPi - Public access
+    - url: "https://gnosis.blockpi.network/v1/rpc/public"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # BlastAPI - Public tier
+    - url: "https://gnosis-mainnet.public.blastapi.io"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Gateway.fm - Public access
+    - url: "https://rpc.gnosis.gateway.fm"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # OnFinality - Public tier
+    - url: "https://gnosis.api.onfinality.io/public"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Nodies - Public access
+    - url: "https://gnosis-public.nodies.app"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Omniatech - Public mainnet
+    - url: "https://endpoints.omniatech.io/v1/gnosis/mainnet/public"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # POKT Network
+    - url: "https://gnosischain-rpc.gateway.pokt.network"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Tatum Gateway
+    - url: "https://gno-mainnet.gateway.tatum.io"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    # Blockscout Archive (archive node for historical data)
+    - url: "https://xdai-archive.blockscout.com"
+      rate_limit: adaptive
+      priority: 2
+      weight: 1
+
+rate_limiting:
+  max_concurrent_requests: 100
+  health_check_interval_seconds: 60
+  stats_log_interval_seconds: 30
+
+  adaptive:
+    start_rps: 10.0
+    max_rps: 1000.0
+    ramp_up_factor: 1.2
+    back_off_factor: 0.5
+    ramp_up_threshold: 100
+
+  aggressive:
+    start_rps: 100.0
+    min_rps: 1.0
+    back_off_factor: 0.5
+
+blockchain:
+  chunk_size: 10000
+  expected_block_time_seconds: 5
+  block_timestamp_cache_size: 10000
+
+retry:
+  max_retries: 5
+  initial_delay_ms: 100
+  backoff_multiplier: 4.0
+  extended_retry_wait_seconds: 300
+
+# Contract configurations
+contracts:
+  - name: "PostageStamp"
+    contract_type: "PostageStamp"
+    address: "0x6a1A21ECA3aB28BE85C7Ba22b2d6eAE5907c900e"
+    deployment_block: 20685974
+
+  - name: "StampsRegistry"
+    contract_type: "StampsRegistry"
+    address: "0xCfC2FfF779E572990304bc5Da857087a3e576dd0"
+    deployment_block: 28165570
+
+storage_incentives_contracts:
+  - name: "PriceOracle"
+    contract_type: "PriceOracle"
+    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+    deployment_block: 37339168
+
+  - name: "StakeRegistry"
+    contract_type: "StakeRegistry"
+    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+    deployment_block: 40430237
+
+  - name: "Redistribution"
+    contract_type: "Redistribution"
+    address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+    deployment_block: 41105199

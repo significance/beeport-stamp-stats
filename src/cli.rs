@@ -14,6 +14,8 @@ use crate::{
     hooks::{EventHook, StubHook},
 };
 
+use crate::rpc_scheduler::RpcScheduler;
+
 /// Beeport Postage Stamp Statistics Tool
 ///
 /// Track and analyze Swarm postage stamp batch events on Gnosis Chain
@@ -55,10 +57,10 @@ pub enum Commands {
     /// Fetch postage stamp events from the blockchain and cache them
     ///
     /// Fetches events from both PostageStamp and StampsRegistry contracts.
-    /// By default, starts from block 31,305,656 (PostageStamp contract deployment).
+    /// By default, starts from block 24,188,618 (PostageStamp contract deployment).
     /// Use --incremental to only fetch new events since the last run.
     Fetch {
-        /// Start block number (defaults to block 31,305,656)
+        /// Start block number (defaults to block 24,188,618)
         #[arg(long)]
         from_block: Option<u64>,
 
@@ -247,6 +249,35 @@ pub enum Commands {
         #[arg(long, default_value = "518400")]
         cache_validity_blocks: u64,
     },
+
+    /// Analyze addresses involved in stamp purchases
+    ///
+    /// Shows unique addresses (owners, payers, transaction senders) and their activity.
+    /// Identifies when owner/payer/from addresses differ.
+    AddressSummary {
+        /// Output format
+        #[arg(long, default_value = "table")]
+        output: OutputFormat,
+
+        /// Minimum number of stamps to include address
+        #[arg(long, default_value = "1")]
+        min_stamps: u32,
+
+        /// Show only addresses where owner != from_address
+        #[arg(long, default_value = "false")]
+        show_delegated_only: bool,
+    },
+
+    /// Show database migration status
+    ///
+    /// Displays which migrations have been applied to the database.
+    Migrations,
+
+    /// Drop and recreate the database (DESTRUCTIVE)
+    ///
+    /// This will permanently delete all data in the database and recreate it.
+    /// Requires confirmation before proceeding.
+    Reset,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum)]
@@ -360,7 +391,7 @@ impl Cli {
 
         // Apply CLI overrides
         if let Some(rpc_url) = &self.rpc_url {
-            config.rpc.url = rpc_url.clone();
+            config.rpc.set_url(rpc_url.clone());
         }
 
         if let Some(cache_db) = &self.cache_db {
@@ -374,6 +405,11 @@ impl Cli {
     }
 
     pub async fn execute(&self) -> Result<()> {
+        // Handle reset command early (before connecting to database)
+        if matches!(&self.command, Commands::Reset) {
+            return self.execute_reset().await;
+        }
+
         // Resolve configuration
         let config = self.resolve_config()?;
 
@@ -381,11 +417,43 @@ impl Cli {
         let registry = ContractRegistry::from_config(&config)?;
         let si_registry = StorageIncentivesContractRegistry::from_config(&config)?;
 
-        // Initialize blockchain client
-        let client = BlockchainClient::new(&config.rpc.url).await?;
-
         // Initialize cache
         let cache = Cache::new(&PathBuf::from(&config.database.path)).await?;
+
+        // Check if multi-RPC is configured
+        let rpc_endpoints = config.rpc.endpoints();
+        let use_multi_rpc = rpc_endpoints.len() > 1;
+
+        if use_multi_rpc {
+            tracing::info!("Multi-RPC mode enabled with {} endpoints", rpc_endpoints.len());
+            for (i, endpoint) in rpc_endpoints.iter().enumerate() {
+                tracing::info!("  RPC #{}: {}", i + 1, endpoint.url);
+            }
+        }
+
+        // Initialize RPC scheduler (if multi-RPC) or single client
+        let scheduler = if use_multi_rpc {
+            use std::sync::Arc;
+
+            let sched: Arc<RpcScheduler> = Arc::new(
+                RpcScheduler::new(
+                    rpc_endpoints,
+                    config.rate_limiting.clone(),
+                    Arc::new(cache.clone()),
+                )
+                .await?,
+            );
+            Some(sched)
+        } else {
+            None
+        };
+
+        // Initialize blockchain client (multi-RPC if scheduler available, single RPC otherwise)
+        let client = if let Some(ref scheduler) = scheduler {
+            BlockchainClient::with_scheduler(scheduler.clone()).await?
+        } else {
+            BlockchainClient::new(&config.rpc.primary_url()).await?
+        };
 
         match &self.command {
             Commands::Fetch {
@@ -527,7 +595,29 @@ impl Cli {
                 )
                 .await
             }
+            Commands::AddressSummary {
+                output,
+                min_stamps,
+                show_delegated_only,
+            } => {
+                self.execute_address_summary(
+                    cache,
+                    output.clone(),
+                    *min_stamps,
+                    *show_delegated_only,
+                )
+                .await
+            }
+            Commands::Migrations => self.execute_migrations(cache).await,
+            Commands::Reset => unreachable!("Reset command handled early"),
+        }?;
+
+        // Print RPC stats if multi-RPC mode was used
+        if let Some(scheduler) = scheduler {
+            scheduler.print_stats().await;
         }
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -571,6 +661,7 @@ impl Cli {
         // Fetch and display postage stamp events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
+        let retry_config = config.retry.clone();
         let events = client
             .fetch_batch_events(
                 from,
@@ -583,17 +674,22 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         tracing::debug!(
                             "Stored {} postage stamp events and {} batches from chunk",
-                            chunk_events.len(),
+                            events_with_from.len(),
                             batches.len()
                         );
 
@@ -967,6 +1063,7 @@ impl Cli {
         // Fetch events with incremental storage
         let cache_clone = cache.clone();
         let client_clone = client.clone();
+        let retry_config = config.retry.clone();
         let events = client
             .fetch_batch_events(
                 from,
@@ -979,12 +1076,17 @@ impl Cli {
                 |chunk_events: Vec<crate::events::StampEvent>| {
                     let cache = cache_clone.clone();
                     let client = client_clone.clone();
+                    let retry = retry_config.clone();
                     async move {
-                        // Store events from this chunk
-                        cache.store_events(&chunk_events).await?;
+                        // Populate from_address for this chunk
+                        let mut events_with_from = chunk_events;
+                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+
+                        // Store events from this chunk (with from_address populated)
+                        cache.store_events(&events_with_from).await?;
 
                         // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&chunk_events).await?;
+                        let batches = client.fetch_batch_info(&events_with_from).await?;
                         cache.store_batches(&batches).await?;
 
                         Ok(())
@@ -1083,6 +1185,117 @@ impl Cli {
         )
         .await
         .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_address_summary(
+        &self,
+        cache: Cache,
+        output: OutputFormat,
+        min_stamps: u32,
+        show_delegated_only: bool,
+    ) -> Result<()> {
+        crate::commands::address_summary::execute(
+            cache,
+            output,
+            min_stamps,
+            show_delegated_only,
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn execute_migrations(&self, cache: Cache) -> Result<()> {
+        let migrations = cache.get_migration_status().await?;
+        let total = migrations.len();
+
+        println!("\n## Database Migration Status\n");
+        println!("{:<20} {:<50} {:<30}", "Version", "Description", "Applied At");
+        println!("{}", "-".repeat(100));
+
+        for migration in migrations {
+            println!(
+                "{:<20} {:<50} {:<30}",
+                migration.version,
+                migration.description,
+                migration.installed_on
+            );
+        }
+
+        println!("\n**Total migrations applied:** {total}\n");
+
+        Ok(())
+    }
+
+    async fn execute_reset(&self) -> Result<()> {
+        // Get database path from config
+        let config = self.resolve_config()?;
+        let db_path = &config.database.path;
+
+        // Determine if PostgreSQL or SQLite
+        let is_postgres = db_path.starts_with("postgres://") || db_path.starts_with("postgresql://");
+
+        // Show warning and get confirmation
+        println!("\n😱 WARNING: This will PERMANENTLY DELETE all data in the database!\n");
+        if is_postgres {
+            println!("Database: PostgreSQL ({db_path})");
+        } else {
+            println!("Database: SQLite ({db_path})");
+        }
+        println!("\nType 'yes' to confirm: ");
+
+        // Read user input
+        use std::io::{self, Write};
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if input.trim().to_lowercase() != "yes" {
+            println!("\n❌ Reset cancelled.");
+            return Ok(());
+        }
+
+        // Perform reset based on database type
+        if is_postgres {
+            // Extract database name from PostgreSQL URL
+            let db_name = if let Some(last_slash) = db_path.rfind('/') {
+                &db_path[last_slash + 1..]
+            } else {
+                return Err(anyhow::anyhow!("Invalid PostgreSQL URL: cannot extract database name"));
+            };
+
+            println!("\n♻️ Dropping PostgreSQL database '{db_name}'...");
+
+            // Drop and recreate database using psql
+            let drop_status = std::process::Command::new("psql")
+                .args(["-c", &format!("DROP DATABASE IF EXISTS {db_name};")])
+                .status()?;
+
+            if !drop_status.success() {
+                return Err(anyhow::anyhow!("Failed to drop database"));
+            }
+
+            let create_status = std::process::Command::new("psql")
+                .args(["-c", &format!("CREATE DATABASE {db_name};")])
+                .status()?;
+
+            if !create_status.success() {
+                return Err(anyhow::anyhow!("Failed to create database"));
+            }
+
+            println!("✅ PostgreSQL database '{db_name}' has been reset successfully!");
+        } else {
+            // SQLite - just delete the file
+            println!("\n♻️ Deleting SQLite database file...");
+
+            if std::path::Path::new(db_path).exists() {
+                std::fs::remove_file(db_path)?;
+            }
+
+            println!("✅ SQLite database '{db_path}' has been reset successfully!");
+            println!("   (Database will be recreated on next run)");
+        }
+
+        Ok(())
     }
 }
 

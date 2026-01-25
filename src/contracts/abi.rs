@@ -7,8 +7,8 @@ use alloy::sol;
 
 // Contract deployment blocks
 #[allow(dead_code)]
-pub const STAMPS_REGISTRY_DEPLOYMENT_BLOCK: u64 = 42_390_510;
-pub const POSTAGE_STAMP_DEPLOYMENT_BLOCK: u64 = 31_305_656;
+pub const STAMPS_REGISTRY_DEPLOYMENT_BLOCK: u64 = 28_165_570;
+pub const POSTAGE_STAMP_DEPLOYMENT_BLOCK: u64 = 24_188_618;
 
 // Storage Incentives contract deployment blocks
 #[allow(dead_code)]
