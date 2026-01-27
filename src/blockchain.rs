@@ -20,15 +20,22 @@ use std::sync::Arc;
 
 /// Information about a chunk to be fetched
 #[derive(Clone)]
-struct ChunkRequest {
-    contract_name: String,
-    _contract_address: Address,
-    from_block: u64,
-    to_block: u64,
-    chunk_num: usize,
-    total_chunks: usize,
-    chunk_hash: String,
-    filter: Filter,
+pub struct ChunkRequest {
+    pub contract_name: String,
+    #[allow(dead_code)]
+    pub contract_address: Address,
+    pub from_block: u64,
+    pub to_block: u64,
+    pub chunk_num: usize,
+    pub total_chunks: usize,
+    pub chunk_hash: String,
+    pub filter: Filter,
+}
+
+/// Result of fetching logs for a chunk
+pub struct ChunkResult {
+    pub chunk: ChunkRequest,
+    pub logs: Vec<Log>,
 }
 
 #[derive(Clone)]
@@ -124,74 +131,26 @@ impl BlockchainClient {
         format!("{result:x}")
     }
 
-    /// Fetch events from a specific contract
+    /// Collect chunks that need to be fetched (not cached)
     ///
-    /// The `on_chunk_complete` callback is called after each chunk is fetched with the events
-    /// from that chunk, allowing for incremental storage.
-    ///
-    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
+    /// Returns a list of ChunkRequest objects for chunks that are not already cached.
+    /// If `refresh` is true, all chunks are returned regardless of cache status.
     #[allow(clippy::too_many_arguments)]
-    async fn fetch_contract_events<F, Fut>(
+    async fn collect_chunks_to_fetch(
         &self,
-        contract: &dyn Contract,
+        contract_address: Address,
+        contract_name: &str,
         from_block: u64,
         to_block: u64,
         cache: &Cache,
-        blockchain_config: &BlockchainConfig,
-        retry_config: &RetryConfig,
+        chunk_size: u64,
         refresh: bool,
-        on_chunk_complete: F,
-    ) -> Result<Vec<StampEvent>>
-    where
-        F: Fn(Vec<StampEvent>) -> Fut,
-        Fut: std::future::Future<Output = Result<()>>,
-    {
-        let contract_address = Address::from_str(contract.address())
-            .map_err(|e| StampError::Contract(format!("Invalid contract address: {e}")))?;
-
-        let mut events = Vec::new();
-        let mut block_cache: HashMap<u64, Block> = HashMap::new();
-
-        // Determine the actual to_block
-        let to_block = if to_block == u64::MAX {
-            tracing::debug!("RPC: get_block_number()");
-            self.provider
-                .get_block_number()
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to get latest block: {e}")))?
-        } else {
-            to_block
-        };
-
-        // Adjust from_block to not start before contract deployment
-        let deployment_block = contract.deployment_block();
-        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
-
-        // Skip if the requested range is entirely before deployment
-        if adjusted_from_block > to_block {
-            tracing::info!(
-                "Skipping {} - contract deployed at block {} (after requested range)",
-                contract.name(),
-                deployment_block
-            );
-            return Ok(events);
-        }
-
-        tracing::info!(
-            "Fetching {} events from block {} to {} (contract deployed at {})",
-            contract.name(),
-            adjusted_from_block,
-            to_block,
-            deployment_block
-        );
-
-        // Phase 1: Collect all chunks that need fetching (not cached)
-        let chunk_size = blockchain_config.chunk_size;
-        let total_blocks = to_block - adjusted_from_block + 1;
+    ) -> Result<Vec<ChunkRequest>> {
+        let total_blocks = to_block - from_block + 1;
         let total_chunks = total_blocks.div_ceil(chunk_size);
 
         let mut chunks_to_fetch = Vec::new();
-        let mut current_from = adjusted_from_block;
+        let mut current_from = from_block;
         let mut chunk_num = 0;
 
         while current_from <= to_block {
@@ -199,13 +158,13 @@ impl BlockchainClient {
             chunk_num += 1;
 
             let chunk_hash =
-                Self::generate_chunk_hash(contract.address(), current_from, current_to);
+                Self::generate_chunk_hash(&format!("{contract_address:?}"), current_from, current_to);
 
             // Check if chunk is already cached (skip check if refresh mode enabled)
             if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
                 tracing::info!(
                     "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
-                    contract.name(),
+                    contract_name,
                     chunk_num,
                     total_chunks,
                     current_from,
@@ -217,7 +176,7 @@ impl BlockchainClient {
 
             tracing::info!(
                 "  {} - Chunk {}/{}: blocks {} to {}",
-                contract.name(),
+                contract_name,
                 chunk_num,
                 total_chunks,
                 current_from,
@@ -230,8 +189,8 @@ impl BlockchainClient {
                 .to_block(current_to);
 
             chunks_to_fetch.push(ChunkRequest {
-                contract_name: contract.name().to_string(),
-                _contract_address: contract_address,
+                contract_name: contract_name.to_string(),
+                contract_address,
                 from_block: current_from,
                 to_block: current_to,
                 chunk_num,
@@ -243,28 +202,40 @@ impl BlockchainClient {
             current_from = current_to + 1;
         }
 
-        // Phase 2: Fetch all logs in parallel (if using scheduler) or sequentially (if single RPC)
-        if chunks_to_fetch.is_empty() {
-            tracing::info!("All chunks cached for {}", contract.name());
-            return Ok(events);
+        Ok(chunks_to_fetch)
+    }
+
+    /// Fetch logs for a list of chunks using either multi-RPC scheduler or single provider
+    ///
+    /// Returns results in the same order as the input chunks.
+    /// Uses parallel fetching when scheduler is available, sequential otherwise.
+    async fn fetch_logs_for_chunks(
+        &self,
+        chunks: &[ChunkRequest],
+        retry_config: &RetryConfig,
+        cache: &Cache,
+        contract_address: &str,
+    ) -> Result<Vec<ChunkResult>> {
+        if chunks.is_empty() {
+            return Ok(Vec::new());
         }
 
         if let Some(ref scheduler) = self.scheduler {
-            // Multi-RPC mode: fetch chunks in batches, process and store immediately
+            // Multi-RPC mode: fetch chunks in batches
             const BATCH_SIZE: usize = 10;
             tracing::info!(
-                "Fetching {} chunks in batches of {} for {}",
-                chunks_to_fetch.len(),
-                BATCH_SIZE,
-                contract.name()
+                "Fetching {} chunks in batches of {} (multi-RPC mode)",
+                chunks.len(),
+                BATCH_SIZE
             );
 
-            // Process chunks in batches
-            for (batch_idx, chunk_batch) in chunks_to_fetch.chunks(BATCH_SIZE).enumerate() {
+            let mut results = Vec::with_capacity(chunks.len());
+
+            for (batch_idx, chunk_batch) in chunks.chunks(BATCH_SIZE).enumerate() {
                 tracing::info!(
                     "Processing batch {}/{} ({} chunks)",
                     batch_idx + 1,
-                    chunks_to_fetch.len().div_ceil(BATCH_SIZE),
+                    chunks.len().div_ceil(BATCH_SIZE),
                     chunk_batch.len()
                 );
 
@@ -286,40 +257,42 @@ impl BlockchainClient {
                                 to_block
                             );
 
-                            scheduler_clone.execute_with_retry(|provider| {
-                                let filter = filter.clone();
-                                let provider = provider.clone();
-                                let contract_name = contract_name.clone();
-                                async move {
-                                    let result = provider
-                                        .get_logs(&filter)
-                                        .await
-                                        .map_err(|e| StampError::Rpc(e.to_string()));
+                            scheduler_clone
+                                .execute_with_retry(|provider| {
+                                    let filter = filter.clone();
+                                    let provider = provider.clone();
+                                    let contract_name = contract_name.clone();
+                                    async move {
+                                        let result = provider
+                                            .get_logs(&filter)
+                                            .await
+                                            .map_err(|e| StampError::Rpc(e.to_string()));
 
-                                    match &result {
-                                        Ok(logs) => {
-                                            tracing::debug!(
-                                                "RPC: get_logs SUCCESS - {} logs for {}, blocks {}-{}",
-                                                logs.len(),
-                                                contract_name,
-                                                from_block,
-                                                to_block
-                                            );
+                                        match &result {
+                                            Ok(logs) => {
+                                                tracing::debug!(
+                                                    "RPC: get_logs SUCCESS - {} logs for {}, blocks {}-{}",
+                                                    logs.len(),
+                                                    contract_name,
+                                                    from_block,
+                                                    to_block
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::debug!(
+                                                    "RPC: get_logs FAILED - {}, blocks {}-{}: {}",
+                                                    contract_name,
+                                                    from_block,
+                                                    to_block,
+                                                    e
+                                                );
+                                            }
                                         }
-                                        Err(e) => {
-                                            tracing::debug!(
-                                                "RPC: get_logs FAILED - {}, blocks {}-{}: {}",
-                                                contract_name,
-                                                from_block,
-                                                to_block,
-                                                e
-                                            );
-                                        }
+
+                                        result
                                     }
-
-                                    result
-                                }
-                            }).await
+                                })
+                                .await
                         }
                     })
                     .collect();
@@ -327,9 +300,9 @@ impl BlockchainClient {
                 // Execute this batch
                 let batch_results = futures::future::join_all(futures).await;
 
-                // Process each chunk immediately after fetching
+                // Process results
                 for (idx, result) in batch_results.into_iter().enumerate() {
-                    let chunk = &chunk_batch[idx];
+                    let chunk = chunk_batch[idx].clone();
 
                     let logs = match result {
                         Ok(logs) => logs,
@@ -344,13 +317,13 @@ impl BlockchainClient {
                             cache
                                 .cache_chunk(
                                     &chunk.chunk_hash,
-                                    contract.address(),
+                                    contract_address,
                                     chunk.from_block,
                                     chunk.to_block,
                                     0,
                                 )
                                 .await?;
-                            continue;
+                            Vec::new()
                         }
                         Err(e) => {
                             return Err(e);
@@ -376,153 +349,260 @@ impl BlockchainClient {
                         );
                     }
 
-                    // Parse each log
-                    let mut chunk_events = Vec::new();
-                    for log in &logs {
-                        if let Some(event) = self
-                            .parse_log(
-                                contract,
-                                log.clone(),
-                                cache,
-                                &mut block_cache,
-                                retry_config,
-                            )
-                            .await?
-                        {
-                            chunk_events.push(event.clone());
-                            events.push(event);
-                        }
-                    }
-
-                    // Cache this chunk
-                    cache
-                        .cache_chunk(
-                            &chunk.chunk_hash,
-                            contract.address(),
-                            chunk.from_block,
-                            chunk.to_block,
-                            chunk_events.len(),
-                        )
-                        .await?;
-
-                    // Call the callback with chunk events for incremental storage
-                    if !chunk_events.is_empty() {
-                        on_chunk_complete(chunk_events).await?;
-                    }
-
-                    // Note: We don't push to all_results since we've already processed this chunk
+                    results.push(ChunkResult { chunk, logs });
                 }
             }
 
-            // Multi-RPC mode: processing is complete, log summary and return
-            tracing::info!(
-                "Total {} events from {}: {}",
-                contract.name(),
-                contract.name(),
-                events.len()
-            );
-
-            tracing::debug!(
-                "Block cache for {}: {} unique blocks cached",
-                contract.name(),
-                block_cache.len()
-            );
-
-            return Ok(events);
-        }
-
-        // Single RPC mode: fetch chunks sequentially with retry logic
-        let all_logs = {
+            Ok(results)
+        } else {
             // Single RPC mode: fetch chunks sequentially with retry logic
-            let mut results = Vec::new();
-            for chunk in &chunks_to_fetch {
+            tracing::info!(
+                "Fetching {} chunks sequentially (single RPC mode)",
+                chunks.len()
+            );
+
+            let mut results = Vec::with_capacity(chunks.len());
+
+            for chunk in chunks {
                 tracing::debug!(
                     "RPC: get_logs(contract={}, from_block={}, to_block={})",
                     chunk.contract_name,
                     chunk.from_block,
                     chunk.to_block
                 );
+
                 let provider = &self.provider;
                 let filter = &chunk.filter;
-                let result = retry_config
+                let logs = retry_config
                     .execute(|| async { provider.get_logs(filter).await })
-                    .await;
+                    .await
+                    .map_err(StampError::Rpc)?;
 
-                match &result {
-                    Ok(logs) => {
-                        tracing::debug!(
-                            "RPC: get_logs SUCCESS - {} logs for {}, blocks {}-{}",
-                            logs.len(),
-                            chunk.contract_name,
-                            chunk.from_block,
-                            chunk.to_block
-                        );
-                        results.push(logs.clone());
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "RPC: get_logs FAILED - {}, blocks {}-{}: {}",
-                            chunk.contract_name,
-                            chunk.from_block,
-                            chunk.to_block,
-                            e
-                        );
-                        return Err(StampError::Rpc(e.to_string()));
-                    }
+                if !logs.is_empty() {
+                    tracing::info!(
+                        "    Found {} logs from {} in chunk {}/{}",
+                        logs.len(),
+                        chunk.contract_name,
+                        chunk.chunk_num,
+                        chunk.total_chunks
+                    );
+                } else {
+                    tracing::debug!(
+                        "    No logs found from {} in chunk {}/{} (blocks {}-{})",
+                        chunk.contract_name,
+                        chunk.chunk_num,
+                        chunk.total_chunks,
+                        chunk.from_block,
+                        chunk.to_block
+                    );
                 }
+
+                results.push(ChunkResult {
+                    chunk: chunk.clone(),
+                    logs,
+                });
             }
-            results
+
+            Ok(results)
+        }
+    }
+
+    /// Get actual block range, adjusting for contract deployment
+    ///
+    /// Returns (adjusted_from_block, actual_to_block) or None if range is before deployment
+    async fn get_block_range(
+        &self,
+        from_block: u64,
+        to_block: u64,
+        deployment_block: u64,
+    ) -> Result<Option<(u64, u64)>> {
+        // Determine the actual to_block
+        let actual_to_block = if to_block == u64::MAX {
+            tracing::debug!("RPC: get_block_number()");
+            self.provider
+                .get_block_number()
+                .await
+                .map_err(|e| StampError::Rpc(format!("Failed to get latest block: {e}")))?
+        } else {
+            to_block
         };
 
-        // Phase 3: Process results (parse logs, cache chunks, call callbacks)
-        for (chunk, logs) in chunks_to_fetch.iter().zip(all_logs.iter()) {
-            if !logs.is_empty() {
-                tracing::info!(
-                    "    Found {} logs from {} in chunk {}/{}",
-                    logs.len(),
-                    chunk.contract_name,
-                    chunk.chunk_num,
-                    chunk.total_chunks
-                );
-            } else {
-                tracing::debug!(
-                    "    No logs found from {} in chunk {}/{} (blocks {}-{})",
-                    chunk.contract_name,
-                    chunk.chunk_num,
-                    chunk.total_chunks,
-                    chunk.from_block,
-                    chunk.to_block
-                );
-            }
+        // Adjust from_block to not start before deployment
+        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
 
-            // Parse each log
-            let chunk_event_count = events.len();
+        // Skip if the requested range is entirely before deployment
+        if adjusted_from_block > actual_to_block {
+            return Ok(None);
+        }
+
+        Ok(Some((adjusted_from_block, actual_to_block)))
+    }
+
+    /// Get block timestamp with caching (memory, database, then RPC)
+    async fn get_block_timestamp_cached(
+        &self,
+        block_number: u64,
+        cache: &Cache,
+        block_cache: &mut HashMap<u64, Block>,
+        retry_config: &RetryConfig,
+    ) -> Result<DateTime<Utc>> {
+        // Check in-memory cache first
+        if let Some(cached_block) = block_cache.get(&block_number) {
+            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
+            let timestamp = cached_block.header.timestamp;
+            return Ok(DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now));
+        }
+
+        // Check database cache
+        if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
+            tracing::debug!("Block cache HIT (database) for block {}", block_number);
+            return Ok(DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now));
+        }
+
+        tracing::debug!(
+            "Block cache MISS - RPC: get_block_by_number(block={})",
+            block_number
+        );
+
+        // Fetch from RPC
+        let fetched_block = if let Some(ref scheduler) = self.scheduler {
+            // Multi-RPC mode
+            scheduler
+                .execute_with_retry(|provider| {
+                    let provider = provider.clone();
+                    async move {
+                        let block = provider
+                            .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
+                            .await
+                            .map_err(|e| StampError::Rpc(format!("Failed to get block: {e}")))?
+                            .ok_or_else(|| {
+                                StampError::Rpc(format!("Block {block_number} not found"))
+                            })?;
+                        Ok(block)
+                    }
+                })
+                .await?
+        } else {
+            // Single RPC mode
+            let provider = &self.provider;
+            retry_config
+                .execute(|| async {
+                    let block = provider
+                        .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
+                        .await
+                        .map_err(|e| std::io::Error::other(format!("Failed to get block: {e}")))?
+                        .ok_or_else(|| {
+                            std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                format!("Block {block_number} not found"),
+                            )
+                        })?;
+                    Ok::<Block, std::io::Error>(block)
+                })
+                .await
+                .map_err(StampError::Rpc)?
+        };
+
+        let timestamp = fetched_block.header.timestamp;
+        block_cache.insert(block_number, fetched_block);
+
+        Ok(DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now))
+    }
+
+    /// Fetch events from a specific contract
+    ///
+    /// The `on_chunk_complete` callback is called after each chunk is fetched with the events
+    /// from that chunk, allowing for incremental storage.
+    ///
+    /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
+    #[allow(clippy::too_many_arguments)]
+    async fn fetch_contract_events<F, Fut>(
+        &self,
+        contract: &dyn Contract,
+        from_block: u64,
+        to_block: u64,
+        cache: &Cache,
+        blockchain_config: &BlockchainConfig,
+        retry_config: &RetryConfig,
+        refresh: bool,
+        on_chunk_complete: F,
+    ) -> Result<Vec<StampEvent>>
+    where
+        F: Fn(Vec<StampEvent>) -> Fut,
+        Fut: std::future::Future<Output = Result<()>>,
+    {
+        let contract_address = Address::from_str(contract.address())
+            .map_err(|e| StampError::Contract(format!("Invalid contract address: {e}")))?;
+
+        // Get adjusted block range
+        let Some((adjusted_from_block, actual_to_block)) = self
+            .get_block_range(from_block, to_block, contract.deployment_block())
+            .await?
+        else {
+            tracing::info!(
+                "Skipping {} - contract deployed at block {} (after requested range)",
+                contract.name(),
+                contract.deployment_block()
+            );
+            return Ok(Vec::new());
+        };
+
+        tracing::info!(
+            "Fetching {} events from block {} to {} (contract deployed at {})",
+            contract.name(),
+            adjusted_from_block,
+            actual_to_block,
+            contract.deployment_block()
+        );
+
+        // Collect chunks to fetch
+        let chunks = self
+            .collect_chunks_to_fetch(
+                contract_address,
+                contract.name(),
+                adjusted_from_block,
+                actual_to_block,
+                cache,
+                blockchain_config.chunk_size,
+                refresh,
+            )
+            .await?;
+
+        if chunks.is_empty() {
+            tracing::info!("All chunks cached for {}", contract.name());
+            return Ok(Vec::new());
+        }
+
+        // Fetch logs for all chunks (parallel if scheduler, sequential otherwise)
+        let chunk_results = self
+            .fetch_logs_for_chunks(&chunks, retry_config, cache, contract.address())
+            .await?;
+
+        // Process results: parse logs, cache chunks, call callbacks
+        let mut events = Vec::new();
+        let mut block_cache: HashMap<u64, Block> = HashMap::new();
+
+        for chunk_result in chunk_results {
             let mut chunk_events = Vec::new();
-            for log in logs {
+
+            for log in &chunk_result.logs {
                 if let Some(event) = self
-                    .parse_log(
-                        contract,
-                        log.clone(),
-                        cache,
-                        &mut block_cache,
-                        retry_config,
-                    )
+                    .parse_log(contract, log.clone(), cache, &mut block_cache, retry_config)
                     .await?
                 {
                     chunk_events.push(event.clone());
                     events.push(event);
                 }
             }
-            let parsed_events = events.len() - chunk_event_count;
 
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk.chunk_hash,
+                    &chunk_result.chunk.chunk_hash,
                     contract.address(),
-                    chunk.from_block,
-                    chunk.to_block,
-                    parsed_events,
+                    chunk_result.chunk.from_block,
+                    chunk_result.chunk.to_block,
+                    chunk_events.len(),
                 )
                 .await?;
 
@@ -533,8 +613,7 @@ impl BlockchainClient {
         }
 
         tracing::info!(
-            "Total {} events from {}: {}",
-            contract.name(),
+            "Total events from {}: {}",
             contract.name(),
             events.len()
         );
@@ -569,67 +648,10 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp - check in-memory cache first, then database, then RPC
-        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
-            let timestamp = cached_block.header.timestamp;
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
-            tracing::debug!("Block cache HIT (database) for block {}", block_number);
-            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
-        } else {
-            tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
-
-            // Use scheduler if available (multi-RPC), otherwise use provider (single RPC)
-            let fetched_block = if let Some(ref scheduler) = self.scheduler {
-                // Multi-RPC mode: use scheduler with retry logic for rate limits
-                scheduler
-                    .execute_with_retry(|provider| {
-                        let provider = provider.clone();
-                        async move {
-                            let block = provider
-                                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                                .await
-                                .map_err(|e| StampError::Rpc(format!("Failed to get block: {e}")))?
-                                .ok_or_else(|| {
-                                    StampError::Rpc(format!("Block {block_number} not found"))
-                                })?;
-                            Ok(block)
-                        }
-                    })
-                    .await?
-            } else {
-                // Single RPC mode: use provider with retry logic
-                let provider = &self.provider;
-                retry_config
-                    .execute(|| async {
-                        let block = provider
-                            .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                            .await
-                            .map_err(|e| {
-                                std::io::Error::other(
-                                    format!("Failed to get block: {e}"),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::NotFound,
-                                    format!("Block {block_number} not found"),
-                                )
-                            })?;
-                        Ok::<Block, std::io::Error>(block)
-                    })
-                    .await
-                    .map_err(StampError::Rpc)?
-            };
-
-            let timestamp = fetched_block.header.timestamp;
-
-            // Store in in-memory cache for future use in this session
-            block_cache.insert(block_number, fetched_block);
-
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-        };
+        // Get block timestamp using the helper
+        let block_timestamp = self
+            .get_block_timestamp_cached(block_number, cache, block_cache, retry_config)
+            .await?;
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)
@@ -642,6 +664,7 @@ impl BlockchainClient {
     /// incremental storage.
     ///
     /// If `refresh` is true, cached chunks will be reprocessed.
+    /// Uses multi-RPC scheduler when available for parallel fetching.
     #[allow(clippy::too_many_arguments)]
     pub async fn fetch_factory_deployment_events<F, Fut>(
         &self,
@@ -661,113 +684,58 @@ impl BlockchainClient {
         let factory_address = Address::from_str(factory.address())
             .map_err(|e| StampError::Contract(format!("Invalid factory address: {e}")))?;
 
-        let mut deployments = Vec::new();
-        let mut block_cache: HashMap<u64, Block> = HashMap::new();
-
-        // Determine the actual to_block
-        let to_block = if to_block == u64::MAX {
-            tracing::debug!("RPC: get_block_number()");
-            self.provider
-                .get_block_number()
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to get latest block: {e}")))?
-        } else {
-            to_block
-        };
-
-        // Adjust from_block to not start before factory deployment
-        let deployment_block = factory.deployment_block();
-        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
-
-        // Skip if the requested range is entirely before deployment
-        if adjusted_from_block > to_block {
+        // Get adjusted block range
+        let Some((adjusted_from_block, actual_to_block)) = self
+            .get_block_range(from_block, to_block, factory.deployment_block())
+            .await?
+        else {
             tracing::info!(
                 "Skipping {} - factory deployed at block {} (after requested range)",
                 factory.name(),
-                deployment_block
+                factory.deployment_block()
             );
-            return Ok(deployments);
-        }
+            return Ok(Vec::new());
+        };
 
         tracing::info!(
             "Fetching {} deployment events from block {} to {} (factory deployed at {})",
             factory.name(),
             adjusted_from_block,
-            to_block,
-            deployment_block
+            actual_to_block,
+            factory.deployment_block()
         );
 
-        // Fetch events in chunks to avoid RPC limits
-        let chunk_size = blockchain_config.chunk_size;
-        let mut current_from = adjusted_from_block;
-
-        let total_blocks = to_block - adjusted_from_block + 1;
-        let total_chunks = total_blocks.div_ceil(chunk_size);
-        let mut chunk_num = 0;
-
-        while current_from <= to_block {
-            let current_to = std::cmp::min(current_from + chunk_size - 1, to_block);
-            chunk_num += 1;
-
-            // Generate cache hash for this chunk
-            let chunk_hash =
-                Self::generate_chunk_hash(factory.address(), current_from, current_to);
-
-            // Check if chunk is already cached (skip check if refresh mode enabled)
-            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
-                tracing::info!(
-                    "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
-                    factory.name(),
-                    chunk_num,
-                    total_chunks,
-                    current_from,
-                    current_to
-                );
-                current_from = current_to + 1;
-                continue;
-            }
-
-            tracing::info!(
-                "  {} - Chunk {}/{}: blocks {} to {}",
+        // Collect chunks to fetch
+        let chunks = self
+            .collect_chunks_to_fetch(
+                factory_address,
                 factory.name(),
-                chunk_num,
-                total_chunks,
-                current_from,
-                current_to
-            );
+                adjusted_from_block,
+                actual_to_block,
+                cache,
+                blockchain_config.chunk_size,
+                refresh,
+            )
+            .await?;
 
-            // Create filter for factory deployment events
-            let filter = Filter::new()
-                .address(factory_address)
-                .from_block(current_from)
-                .to_block(current_to);
+        if chunks.is_empty() {
+            tracing::info!("All chunks cached for {}", factory.name());
+            return Ok(Vec::new());
+        }
 
-            // Use retry policy for rate limit handling
-            tracing::debug!(
-                "RPC: get_logs(factory={}, from_block={}, to_block={})",
-                factory.address(),
-                current_from,
-                current_to
-            );
-            let provider = &self.provider;
-            let logs = retry_config
-                .execute(|| async { provider.get_logs(&filter).await })
-                .await
-                .map_err(StampError::Rpc)?;
+        // Fetch logs for all chunks (parallel if scheduler, sequential otherwise)
+        let chunk_results = self
+            .fetch_logs_for_chunks(&chunks, retry_config, cache, factory.address())
+            .await?;
 
-            if !logs.is_empty() {
-                tracing::info!(
-                    "    Found {} logs from {} in this chunk",
-                    logs.len(),
-                    factory.name()
-                );
-            }
+        // Process results: parse logs, cache chunks, call callbacks
+        let mut deployments = Vec::new();
+        let mut block_cache: HashMap<u64, Block> = HashMap::new();
 
-            // Parse each log
-            let chunk_deployment_count = deployments.len();
+        for chunk_result in chunk_results {
             let mut chunk_deployments = Vec::new();
-            for log in logs {
-                // Get block timestamp for the deployment
+
+            for log in chunk_result.logs {
                 let block_number = log
                     .block_number
                     .ok_or_else(|| StampError::Parse("Missing block number".to_string()))?;
@@ -776,47 +744,10 @@ impl BlockchainClient {
                     .transaction_hash
                     .ok_or_else(|| StampError::Parse("Missing transaction hash".to_string()))?;
 
-                // Get block timestamp - check in-memory cache first, then database, then RPC
-                let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
-                    tracing::debug!("Block cache HIT (memory) for block {}", block_number);
-                    let timestamp = cached_block.header.timestamp;
-                    DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-                } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
-                    tracing::debug!("Block cache HIT (database) for block {}", block_number);
-                    DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
-                } else {
-                    tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
-
-                    // Wrap get_block_by_number with retry logic
-                    let provider = &self.provider;
-                    let fetched_block = retry_config
-                        .execute(|| async {
-                            let block = provider
-                                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                                .await
-                                .map_err(|e| {
-                                    std::io::Error::other(
-                                        format!("Failed to get block: {e}"),
-                                    )
-                                })?
-                                .ok_or_else(|| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::NotFound,
-                                        format!("Block {block_number} not found"),
-                                    )
-                                })?;
-                            Ok::<Block, std::io::Error>(block)
-                        })
-                        .await
-                        .map_err(StampError::Rpc)?;
-
-                    let timestamp = fetched_block.header.timestamp;
-
-                    // Store in in-memory cache for future use in this session
-                    block_cache.insert(block_number, fetched_block);
-
-                    DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-                };
+                // Get block timestamp using the helper
+                let block_timestamp = self
+                    .get_block_timestamp_cached(block_number, cache, &mut block_cache, retry_config)
+                    .await?;
 
                 // Parse deployment event
                 if let Some(deployment) =
@@ -826,16 +757,15 @@ impl BlockchainClient {
                     deployments.push(deployment);
                 }
             }
-            let parsed_deployments = deployments.len() - chunk_deployment_count;
 
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk_hash,
+                    &chunk_result.chunk.chunk_hash,
                     factory.address(),
-                    current_from,
-                    current_to,
-                    parsed_deployments,
+                    chunk_result.chunk.from_block,
+                    chunk_result.chunk.to_block,
+                    chunk_deployments.len(),
                 )
                 .await?;
 
@@ -843,13 +773,10 @@ impl BlockchainClient {
             if !chunk_deployments.is_empty() {
                 on_chunk_complete(chunk_deployments).await?;
             }
-
-            current_from = current_to + 1;
         }
 
         tracing::info!(
-            "Total {} deployments from {}: {}",
-            factory.name(),
+            "Total deployments from {}: {}",
             factory.name(),
             deployments.len()
         );
@@ -864,6 +791,7 @@ impl BlockchainClient {
     /// after each chunk is fetched to enable incremental storage.
     ///
     /// If `refresh` is true, cached chunks will be reprocessed.
+    /// Uses multi-RPC scheduler when available for parallel fetching.
     #[allow(clippy::too_many_arguments)]
     pub async fn fetch_chequebook_events<F, Fut>(
         &self,
@@ -883,112 +811,59 @@ impl BlockchainClient {
         let chequebook_address = Address::from_str(chequebook.address())
             .map_err(|e| StampError::Contract(format!("Invalid chequebook address: {e}")))?;
 
-        let mut events = Vec::new();
-        let mut block_cache: HashMap<u64, Block> = HashMap::new();
-
-        // Determine the actual to_block
-        let to_block = if to_block == u64::MAX {
-            tracing::debug!("RPC: get_block_number()");
-            self.provider
-                .get_block_number()
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to get latest block: {e}")))?
-        } else {
-            to_block
-        };
-
-        // Adjust from_block to not start before chequebook deployment
-        let deployment_block = chequebook.deployment_block();
-        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
-
-        // Skip if the requested range is entirely before deployment
-        if adjusted_from_block > to_block {
+        // Get adjusted block range
+        let Some((adjusted_from_block, actual_to_block)) = self
+            .get_block_range(from_block, to_block, chequebook.deployment_block())
+            .await?
+        else {
             tracing::debug!(
                 "Skipping {} - chequebook deployed at block {} (after requested range)",
                 chequebook.address(),
-                deployment_block
+                chequebook.deployment_block()
             );
-            return Ok(events);
-        }
+            return Ok(Vec::new());
+        };
 
         tracing::debug!(
             "Fetching events from chequebook {} from block {} to {} (deployed at {})",
             chequebook.address(),
             adjusted_from_block,
-            to_block,
-            deployment_block
+            actual_to_block,
+            chequebook.deployment_block()
         );
 
-        // Fetch events in chunks to avoid RPC limits
-        let chunk_size = blockchain_config.chunk_size;
-        let mut current_from = adjusted_from_block;
+        // Collect chunks to fetch (use short name for logging since chequebook addresses are long)
+        let short_name = &chequebook.address()[..10];
+        let chunks = self
+            .collect_chunks_to_fetch(
+                chequebook_address,
+                short_name,
+                adjusted_from_block,
+                actual_to_block,
+                cache,
+                blockchain_config.chunk_size,
+                refresh,
+            )
+            .await?;
 
-        let total_blocks = to_block - adjusted_from_block + 1;
-        let total_chunks = total_blocks.div_ceil(chunk_size);
-        let mut chunk_num = 0;
+        if chunks.is_empty() {
+            tracing::debug!("All chunks cached for chequebook {}", chequebook.address());
+            return Ok(Vec::new());
+        }
 
-        while current_from <= to_block {
-            let current_to = std::cmp::min(current_from + chunk_size - 1, to_block);
-            chunk_num += 1;
+        // Fetch logs for all chunks (parallel if scheduler, sequential otherwise)
+        let chunk_results = self
+            .fetch_logs_for_chunks(&chunks, retry_config, cache, chequebook.address())
+            .await?;
 
-            // Generate cache hash for this chunk
-            let chunk_hash =
-                Self::generate_chunk_hash(chequebook.address(), current_from, current_to);
+        // Process results: parse logs, cache chunks, call callbacks
+        let mut events = Vec::new();
+        let mut block_cache: HashMap<u64, Block> = HashMap::new();
 
-            // Check if chunk is already cached (skip check if refresh mode enabled)
-            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
-                tracing::debug!(
-                    "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
-                    &chequebook.address()[..10],
-                    chunk_num,
-                    total_chunks,
-                    current_from,
-                    current_to
-                );
-                current_from = current_to + 1;
-                continue;
-            }
-
-            tracing::debug!(
-                "  {} - Chunk {}/{}: blocks {} to {}",
-                &chequebook.address()[..10],
-                chunk_num,
-                total_chunks,
-                current_from,
-                current_to
-            );
-
-            // Create filter for all events from this chequebook
-            let filter = Filter::new()
-                .address(chequebook_address)
-                .from_block(current_from)
-                .to_block(current_to);
-
-            // Use retry policy for rate limit handling
-            tracing::debug!(
-                "RPC: get_logs(chequebook={}, from_block={}, to_block={})",
-                chequebook.address(),
-                current_from,
-                current_to
-            );
-            let provider = &self.provider;
-            let logs = retry_config
-                .execute(|| async { provider.get_logs(&filter).await })
-                .await
-                .map_err(StampError::Rpc)?;
-
-            if !logs.is_empty() {
-                tracing::debug!(
-                    "    Found {} logs from chequebook in this chunk",
-                    logs.len()
-                );
-            }
-
-            // Parse each log
-            let chunk_event_count = events.len();
+        for chunk_result in chunk_results {
             let mut chunk_events = Vec::new();
-            for log in logs {
-                // Get block timestamp
+
+            for log in chunk_result.logs {
                 let block_number = log
                     .block_number
                     .ok_or_else(|| StampError::Parse("Missing block number".to_string()))?;
@@ -1001,47 +876,10 @@ impl BlockchainClient {
                     .log_index
                     .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-                // Get block timestamp - check in-memory cache first, then database, then RPC
-                let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
-                    tracing::debug!("Block cache HIT (memory) for block {}", block_number);
-                    let timestamp = cached_block.header.timestamp;
-                    DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-                } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
-                    tracing::debug!("Block cache HIT (database) for block {}", block_number);
-                    DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
-                } else {
-                    tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
-
-                    // Wrap get_block_by_number with retry logic
-                    let provider = &self.provider;
-                    let fetched_block = retry_config
-                        .execute(|| async {
-                            let block = provider
-                                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                                .await
-                                .map_err(|e| {
-                                    std::io::Error::other(
-                                        format!("Failed to get block: {e}"),
-                                    )
-                                })?
-                                .ok_or_else(|| {
-                                    std::io::Error::new(
-                                        std::io::ErrorKind::NotFound,
-                                        format!("Block {block_number} not found"),
-                                    )
-                                })?;
-                            Ok::<Block, std::io::Error>(block)
-                        })
-                        .await
-                        .map_err(StampError::Rpc)?;
-
-                    let timestamp = fetched_block.header.timestamp;
-
-                    // Store in in-memory cache for future use in this session
-                    block_cache.insert(block_number, fetched_block);
-
-                    DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-                };
+                // Get block timestamp using the helper
+                let block_timestamp = self
+                    .get_block_timestamp_cached(block_number, cache, &mut block_cache, retry_config)
+                    .await?;
 
                 // Parse payment channel event
                 if let Some(event) = chequebook.parse_log(
@@ -1055,16 +893,15 @@ impl BlockchainClient {
                     events.push(event);
                 }
             }
-            let parsed_events = events.len() - chunk_event_count;
 
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk_hash,
+                    &chunk_result.chunk.chunk_hash,
                     chequebook.address(),
-                    current_from,
-                    current_to,
-                    parsed_events,
+                    chunk_result.chunk.from_block,
+                    chunk_result.chunk.to_block,
+                    chunk_events.len(),
                 )
                 .await?;
 
@@ -1072,8 +909,6 @@ impl BlockchainClient {
             if !chunk_events.is_empty() {
                 on_chunk_complete(chunk_events).await?;
             }
-
-            current_from = current_to + 1;
         }
 
         tracing::debug!(
@@ -1137,6 +972,7 @@ impl BlockchainClient {
     /// Fetch events from a specific storage incentives contract
     ///
     /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
+    /// Uses multi-RPC scheduler when available for parallel fetching.
     #[allow(clippy::too_many_arguments)]
     async fn fetch_storage_incentives_contract_events<F, Fut>(
         &self,
@@ -1156,356 +992,58 @@ impl BlockchainClient {
         let contract_address = Address::from_str(contract.address())
             .map_err(|e| StampError::Contract(format!("Invalid contract address: {e}")))?;
 
-        let mut events: Vec<StorageIncentivesEvent> = Vec::new();
-        let mut block_cache: HashMap<u64, Block> = HashMap::new();
-
-        // Determine the actual to_block
-        let to_block = if to_block == u64::MAX {
-            tracing::debug!("RPC: get_block_number()");
-            self.provider
-                .get_block_number()
-                .await
-                .map_err(|e| StampError::Rpc(format!("Failed to get latest block: {e}")))?
-        } else {
-            to_block
-        };
-
-        // Adjust from_block to not start before contract deployment
-        let deployment_block = contract.deployment_block();
-        let adjusted_from_block = std::cmp::max(from_block, deployment_block);
-
-        // Skip if the requested range is entirely before deployment
-        if adjusted_from_block > to_block {
+        // Get adjusted block range
+        let Some((adjusted_from_block, actual_to_block)) = self
+            .get_block_range(from_block, to_block, contract.deployment_block())
+            .await?
+        else {
             tracing::info!(
                 "Skipping {} - contract deployed at block {} (after requested range)",
                 contract.name(),
-                deployment_block
+                contract.deployment_block()
             );
-            return Ok(events);
-        }
+            return Ok(Vec::new());
+        };
 
         tracing::info!(
             "Fetching {} events from block {} to {} (contract deployed at {})",
             contract.name(),
             adjusted_from_block,
-            to_block,
-            deployment_block
+            actual_to_block,
+            contract.deployment_block()
         );
 
-        // Phase 1: Collect all chunks that need fetching (not cached)
-        let chunk_size = blockchain_config.chunk_size;
-        let total_blocks = to_block - adjusted_from_block + 1;
-        let total_chunks = total_blocks.div_ceil(chunk_size);
-
-        let mut chunks_to_fetch = Vec::new();
-        let mut current_from = adjusted_from_block;
-        let mut chunk_num = 0;
-
-        while current_from <= to_block {
-            let current_to = std::cmp::min(current_from + chunk_size - 1, to_block);
-            chunk_num += 1;
-
-            let chunk_hash =
-                Self::generate_chunk_hash(contract.address(), current_from, current_to);
-
-            // Check if chunk is already cached (skip check if refresh mode enabled)
-            if !refresh && cache.is_chunk_cached(&chunk_hash).await? {
-                tracing::info!(
-                    "  {} - Chunk {}/{}: blocks {} to {} [CACHED]",
-                    contract.name(),
-                    chunk_num,
-                    total_chunks,
-                    current_from,
-                    current_to
-                );
-                current_from = current_to + 1;
-                continue;
-            }
-
-            tracing::info!(
-                "  {} - Chunk {}/{}: blocks {} to {}",
+        // Collect chunks to fetch
+        let chunks = self
+            .collect_chunks_to_fetch(
+                contract_address,
                 contract.name(),
-                chunk_num,
-                total_chunks,
-                current_from,
-                current_to
-            );
+                adjusted_from_block,
+                actual_to_block,
+                cache,
+                blockchain_config.chunk_size,
+                refresh,
+            )
+            .await?;
 
-            let filter = Filter::new()
-                .address(contract_address)
-                .from_block(current_from)
-                .to_block(current_to);
-
-            chunks_to_fetch.push(ChunkRequest {
-                contract_name: contract.name().to_string(),
-                _contract_address: contract_address,
-                from_block: current_from,
-                to_block: current_to,
-                chunk_num,
-                total_chunks: total_chunks as usize,
-                chunk_hash,
-                filter,
-            });
-
-            current_from = current_to + 1;
-        }
-
-        // Phase 2: Fetch all logs in parallel (if using scheduler) or sequentially (if single RPC)
-        if chunks_to_fetch.is_empty() {
+        if chunks.is_empty() {
             tracing::info!("All chunks cached for {}", contract.name());
-            return Ok(events);
+            return Ok(Vec::new());
         }
 
-        if let Some(ref scheduler) = self.scheduler {
-            // Multi-RPC mode: fetch chunks in batches, process and store immediately
-            const BATCH_SIZE: usize = 10;
-            tracing::info!(
-                "Fetching {} chunks in batches of {} for {}",
-                chunks_to_fetch.len(),
-                BATCH_SIZE,
-                contract.name()
-            );
+        // Fetch logs for all chunks (parallel if scheduler, sequential otherwise)
+        let chunk_results = self
+            .fetch_logs_for_chunks(&chunks, retry_config, cache, contract.address())
+            .await?;
 
-            // Process chunks in batches
-            for (batch_idx, chunk_batch) in chunks_to_fetch.chunks(BATCH_SIZE).enumerate() {
-                tracing::info!(
-                    "Processing batch {}/{} ({} chunks)",
-                    batch_idx + 1,
-                    chunks_to_fetch.len().div_ceil(BATCH_SIZE),
-                    chunk_batch.len()
-                );
+        // Process results: parse logs, cache chunks, call callbacks
+        let mut events = Vec::new();
+        let mut block_cache: HashMap<u64, Block> = HashMap::new();
 
-                // Create futures for this batch
-                let futures: Vec<_> = chunk_batch
-                    .iter()
-                    .map(|chunk| {
-                        let filter = chunk.filter.clone();
-                        let from_block = chunk.from_block;
-                        let to_block = chunk.to_block;
-                        let contract_name = chunk.contract_name.clone();
-                        let scheduler_clone = scheduler.clone();
-
-                        async move {
-                            tracing::debug!(
-                                "RPC: get_logs(contract={}, from_block={}, to_block={})",
-                                contract_name,
-                                from_block,
-                                to_block
-                            );
-
-                            scheduler_clone.execute_with_retry(|provider| {
-                                let filter = filter.clone();
-                                let provider = provider.clone();
-                                let contract_name = contract_name.clone();
-                                async move {
-                                    let result = provider
-                                        .get_logs(&filter)
-                                        .await
-                                        .map_err(|e| StampError::Rpc(e.to_string()));
-
-                                    match &result {
-                                        Ok(logs) => {
-                                            tracing::debug!(
-                                                "RPC: get_logs SUCCESS - {} logs for {}, blocks {}-{}",
-                                                logs.len(),
-                                                contract_name,
-                                                from_block,
-                                                to_block
-                                            );
-                                        }
-                                        Err(e) => {
-                                            tracing::debug!(
-                                                "RPC: get_logs FAILED - {}, blocks {}-{}: {}",
-                                                contract_name,
-                                                from_block,
-                                                to_block,
-                                                e
-                                            );
-                                        }
-                                    }
-
-                                    result
-                                }
-                            }).await
-                        }
-                    })
-                    .collect();
-
-                // Execute this batch
-                let batch_results = futures::future::join_all(futures).await;
-
-                // Process each chunk immediately after fetching
-                for (idx, result) in batch_results.into_iter().enumerate() {
-                    let chunk = &chunk_batch[idx];
-
-                    let logs = match result {
-                        Ok(logs) => logs,
-                        Err(StampError::DataUnavailable(_)) => {
-                            tracing::warn!(
-                                "Skipping chunk {}-{} for {}: data unavailable (pruned) on all RPC endpoints",
-                                chunk.from_block,
-                                chunk.to_block,
-                                chunk.contract_name
-                            );
-                            // Cache this chunk as having 0 events
-                            cache
-                                .cache_chunk(
-                                    &chunk.chunk_hash,
-                                    contract.address(),
-                                    chunk.from_block,
-                                    chunk.to_block,
-                                    0,
-                                )
-                                .await?;
-                            continue;
-                        }
-                        Err(e) => {
-                            return Err(e);
-                        }
-                    };
-
-                    if !logs.is_empty() {
-                        tracing::info!(
-                            "    Found {} logs from {} in chunk {}/{}",
-                            logs.len(),
-                            chunk.contract_name,
-                            chunk.chunk_num,
-                            chunk.total_chunks
-                        );
-                    } else {
-                        tracing::debug!(
-                            "    No logs found from {} in chunk {}/{} (blocks {}-{})",
-                            chunk.contract_name,
-                            chunk.chunk_num,
-                            chunk.total_chunks,
-                            chunk.from_block,
-                            chunk.to_block
-                        );
-                    }
-
-                    // Parse each log
-                    let mut chunk_events = Vec::new();
-                    for log in &logs {
-                        if let Some(event) = self
-                            .parse_storage_incentives_log(
-                                contract,
-                                log.clone(),
-                                cache,
-                                &mut block_cache,
-                                retry_config,
-                            )
-                            .await?
-                        {
-                            chunk_events.push(event.clone());
-                            events.push(event);
-                        }
-                    }
-
-                    // Cache this chunk
-                    cache
-                        .cache_chunk(
-                            &chunk.chunk_hash,
-                            contract.address(),
-                            chunk.from_block,
-                            chunk.to_block,
-                            chunk_events.len(),
-                        )
-                        .await?;
-
-                    // Call the callback with chunk events for incremental storage
-                    if !chunk_events.is_empty() {
-                        on_chunk_complete(chunk_events).await?;
-                    }
-
-                    // Note: We don't push to all_results since we've already processed this chunk
-                }
-            }
-
-            // Multi-RPC mode: processing is complete, log summary and return
-            tracing::info!(
-                "Total {} events from {}: {}",
-                contract.name(),
-                contract.name(),
-                events.len()
-            );
-
-            tracing::debug!(
-                "Block cache for {}: {} unique blocks cached",
-                contract.name(),
-                block_cache.len()
-            );
-
-            return Ok(events);
-        }
-
-        // Single RPC mode: fetch chunks sequentially with retry logic
-        let all_logs = {
-            // Single RPC mode: fetch chunks sequentially with retry logic
-            let mut results = Vec::new();
-            for chunk in &chunks_to_fetch {
-                tracing::debug!(
-                    "RPC: get_logs(contract={}, from_block={}, to_block={})",
-                    chunk.contract_name,
-                    chunk.from_block,
-                    chunk.to_block
-                );
-                let provider = &self.provider;
-                let filter = &chunk.filter;
-                let result = retry_config
-                    .execute(|| async { provider.get_logs(filter).await })
-                    .await;
-
-                match &result {
-                    Ok(logs) => {
-                        tracing::debug!(
-                            "RPC: get_logs SUCCESS - {} logs for {}, blocks {}-{}",
-                            logs.len(),
-                            chunk.contract_name,
-                            chunk.from_block,
-                            chunk.to_block
-                        );
-                        results.push(logs.clone());
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "RPC: get_logs FAILED - {}, blocks {}-{}: {}",
-                            chunk.contract_name,
-                            chunk.from_block,
-                            chunk.to_block,
-                            e
-                        );
-                        return Err(StampError::Rpc(e.to_string()));
-                    }
-                }
-            }
-            results
-        };
-
-        // Phase 3: Process results (parse logs, cache chunks, call callbacks)
-        for (chunk, logs) in chunks_to_fetch.iter().zip(all_logs.iter()) {
-            if !logs.is_empty() {
-                tracing::info!(
-                    "    Found {} logs from {} in chunk {}/{}",
-                    logs.len(),
-                    chunk.contract_name,
-                    chunk.chunk_num,
-                    chunk.total_chunks
-                );
-            } else {
-                tracing::debug!(
-                    "    No logs found from {} in chunk {}/{} (blocks {}-{})",
-                    chunk.contract_name,
-                    chunk.chunk_num,
-                    chunk.total_chunks,
-                    chunk.from_block,
-                    chunk.to_block
-                );
-            }
-
-            // Parse each log
-            let chunk_event_count = events.len();
+        for chunk_result in chunk_results {
             let mut chunk_events = Vec::new();
-            for log in logs {
+
+            for log in &chunk_result.logs {
                 if let Some(event) = self
                     .parse_storage_incentives_log(
                         contract,
@@ -1520,16 +1058,15 @@ impl BlockchainClient {
                     events.push(event);
                 }
             }
-            let parsed_events = events.len() - chunk_event_count;
 
             // Cache this chunk
             cache
                 .cache_chunk(
-                    &chunk.chunk_hash,
+                    &chunk_result.chunk.chunk_hash,
                     contract.address(),
-                    chunk.from_block,
-                    chunk.to_block,
-                    parsed_events,
+                    chunk_result.chunk.from_block,
+                    chunk_result.chunk.to_block,
+                    chunk_events.len(),
                 )
                 .await?;
 
@@ -1540,8 +1077,7 @@ impl BlockchainClient {
         }
 
         tracing::info!(
-            "Total {} events from {}: {}",
-            contract.name(),
+            "Total events from {}: {}",
             contract.name(),
             events.len()
         );
@@ -1576,67 +1112,10 @@ impl BlockchainClient {
             .log_index
             .ok_or_else(|| StampError::Parse("Missing log index".to_string()))?;
 
-        // Get block timestamp - check in-memory cache first, then database, then RPC
-        let block_timestamp = if let Some(cached_block) = block_cache.get(&block_number) {
-            tracing::debug!("Block cache HIT (memory) for block {}", block_number);
-            let timestamp = cached_block.header.timestamp;
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-        } else if let Some(db_timestamp) = cache.get_block_timestamp(block_number).await? {
-            tracing::debug!("Block cache HIT (database) for block {}", block_number);
-            DateTime::from_timestamp(db_timestamp, 0).unwrap_or_else(Utc::now)
-        } else {
-            tracing::debug!("Block cache MISS - RPC: get_block_by_number(block={})", block_number);
-
-            // Use scheduler if available (multi-RPC), otherwise use provider (single RPC)
-            let fetched_block = if let Some(ref scheduler) = self.scheduler {
-                // Multi-RPC mode: use scheduler with retry logic for rate limits
-                scheduler
-                    .execute_with_retry(|provider| {
-                        let provider = provider.clone();
-                        async move {
-                            let block = provider
-                                .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                                .await
-                                .map_err(|e| StampError::Rpc(format!("Failed to get block: {e}")))?
-                                .ok_or_else(|| {
-                                    StampError::Rpc(format!("Block {block_number} not found"))
-                                })?;
-                            Ok(block)
-                        }
-                    })
-                    .await?
-            } else {
-                // Single RPC mode: use provider with retry logic
-                let provider = &self.provider;
-                retry_config
-                    .execute(|| async {
-                        let block = provider
-                            .get_block_by_number(block_number.into(), BlockTransactionsKind::Hashes)
-                            .await
-                            .map_err(|e| {
-                                std::io::Error::other(
-                                    format!("Failed to get block: {e}"),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::NotFound,
-                                    format!("Block {block_number} not found"),
-                                )
-                            })?;
-                        Ok::<Block, std::io::Error>(block)
-                    })
-                    .await
-                    .map_err(StampError::Rpc)?
-            };
-
-            let timestamp = fetched_block.header.timestamp;
-
-            // Store in in-memory cache for future use in this session
-            block_cache.insert(block_number, fetched_block);
-
-            DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_else(Utc::now)
-        };
+        // Get block timestamp using the helper
+        let block_timestamp = self
+            .get_block_timestamp_cached(block_number, cache, block_cache, retry_config)
+            .await?;
 
         // Delegate to the contract's parse_log implementation
         contract.parse_log(log, block_number, block_timestamp, transaction_hash, log_index)

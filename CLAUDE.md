@@ -588,36 +588,36 @@ To add commands:
 **IMPORTANT: Always use PostgreSQL for testing, never SQLite**
 
 For all testing activities:
-- **Database name:** `beeport4_testing`
-- **Source database:** `beeport4` (production/main database)
-- **Reset procedure:** Always recreate `beeport4_testing` from `beeport4` at the start of every test run
+- **Database name:** `beeport_bandwidth_testing_testing`
+- **Source database:** `beeport_bandwidth_testing` (production/main database)
+- **Reset procedure:** Always recreate `beeport_bandwidth_testing_testing` from `beeport_bandwidth_testing` at the start of every test run
 
 **CRITICAL: User Confirmation Required**
 
 Before creating or resetting the testing database, Claude MUST:
 
-1. **Always ask before copying from beeport4:**
-   - Check if `beeport4` database exists
-   - Ask user for explicit permission before copying data to `beeport4_testing`
-   - Example: "I need to reset the testing database. May I copy beeport4 to beeport4_testing?"
+1. **Always ask before copying from beeport_bandwidth_testing:**
+   - Check if `beeport_bandwidth_testing` database exists
+   - Ask user for explicit permission before copying data to `beeport_bandwidth_testing_testing`
+   - Example: "I need to reset the testing database. May I copy beeport_bandwidth_testing to beeport_bandwidth_testing_testing?"
 
-2. **If beeport4 does not exist:**
+2. **If beeport_bandwidth_testing does not exist:**
    - Notify the user that the source database doesn't exist
    - Ask if they want Claude to create a fresh empty database
-   - Example: "The beeport4 database doesn't exist. Would you like me to create a new empty beeport4_testing database for testing?"
+   - Example: "The beeport_bandwidth_testing database doesn't exist. Would you like me to create a new empty beeport_bandwidth_testing_testing database for testing?"
 
 **Standard test database setup:**
 ```bash
 # Check if source database exists first
-psql -lqt | cut -d \| -f 1 | grep -qw beeport4
+psql -lqt | cut -d \| -f 1 | grep -qw beeport_bandwidth_testing
 
 # If it exists, drop and recreate testing database from production data
-psql -c "DROP DATABASE IF EXISTS beeport4_testing;"
-psql -c "CREATE DATABASE beeport4_testing TEMPLATE beeport4;"
+psql -c "DROP DATABASE IF EXISTS beeport_bandwidth_testing_testing;"
+psql -c "CREATE DATABASE beeport_bandwidth_testing_testing TEMPLATE beeport_bandwidth_testing;"
 
-# If beeport4 doesn't exist, create fresh empty testing database
-psql -c "DROP DATABASE IF EXISTS beeport4_testing;"
-psql -c "CREATE DATABASE beeport4_testing;"
+# If beeport_bandwidth_testing doesn't exist, create fresh empty testing database
+psql -c "DROP DATABASE IF EXISTS beeport_bandwidth_testing_testing;"
+psql -c "CREATE DATABASE beeport_bandwidth_testing_testing;"
 ```
 
 **Why this approach:**
@@ -632,7 +632,7 @@ psql -c "CREATE DATABASE beeport4_testing;"
 ```bash
 # Example: Fetch command with testing database
 ./target/release/beeport-stamp-stats \
-  --database-url "postgresql://localhost/beeport4_testing" \
+  --database-url "postgresql://localhost/beeport_bandwidth_testing_testing" \
   fetch --from-block <start> --to-block <end>
 ```
 
@@ -664,11 +664,11 @@ cargo clippy -- -D warnings
 #### 2. Fetch Command ✓
 ```bash
 # Reset testing database first
-psql -c "DROP DATABASE IF EXISTS beeport4_testing;"
-psql -c "CREATE DATABASE beeport4_testing TEMPLATE beeport4;"
+psql -c "DROP DATABASE IF EXISTS beeport_bandwidth_testing_testing;"
+psql -c "CREATE DATABASE beeport_bandwidth_testing_testing TEMPLATE beeport_bandwidth_testing;"
 
 ./target/release/beeport-stamp-stats \
-  --database-url "postgresql://localhost/beeport4_testing" \
+  --database-url "postgresql://localhost/beeport_bandwidth_testing_testing" \
   fetch --from-block <start> --to-block <end>
 ```
 - Use a small block range (10-20 blocks)
@@ -690,7 +690,7 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 #### 4. Sync Command ✓
 ```bash
 ./target/release/beeport-stamp-stats \
-  --database-url "postgresql://localhost/beeport4_testing" \
+  --database-url "postgresql://localhost/beeport_bandwidth_testing_testing" \
   sync --from-block <next> --to-block <end>
 ```
 - Verify incremental sync works
@@ -700,7 +700,7 @@ https://gnosisscan.io/tx/0x<transaction_hash>
 #### 5. Summary Command with Filters ✓
 ```bash
 # Test all filter combinations
-DB="--database-url postgresql://localhost/beeport4_testing"
+DB="--database-url postgresql://localhost/beeport_bandwidth_testing_testing"
 ./target/release/beeport-stamp-stats $DB summary --months 0
 ./target/release/beeport-stamp-stats $DB summary --contract postage-stamp
 ./target/release/beeport-stamp-stats $DB summary --event-type batch-created
@@ -713,7 +713,7 @@ DB="--database-url postgresql://localhost/beeport4_testing"
 #### 6. Batch Status Command ✓
 ```bash
 # Test sorting and output formats
-DB="--database-url postgresql://localhost/beeport4_testing"
+DB="--database-url postgresql://localhost/beeport_bandwidth_testing_testing"
 ./target/release/beeport-stamp-stats $DB batch-status --sort-by ttl
 ./target/release/beeport-stamp-stats $DB batch-status --output json
 ./target/release/beeport-stamp-stats $DB batch-status --output csv
@@ -727,7 +727,7 @@ DB="--database-url postgresql://localhost/beeport4_testing"
 
 #### 7. Expiry Analytics Command ✓
 ```bash
-DB="--database-url postgresql://localhost/beeport4_testing"
+DB="--database-url postgresql://localhost/beeport_bandwidth_testing_testing"
 ./target/release/beeport-stamp-stats $DB expiry-analytics --period week
 ./target/release/beeport-stamp-stats $DB expiry-analytics --period month
 ./target/release/beeport-stamp-stats $DB expiry-analytics --output json
@@ -739,7 +739,7 @@ DB="--database-url postgresql://localhost/beeport4_testing"
 #### 8. Export Command ✓
 ```bash
 # Test both formats
-DB="--database-url postgresql://localhost/beeport4_testing"
+DB="--database-url postgresql://localhost/beeport_bandwidth_testing_testing"
 ./target/release/beeport-stamp-stats $DB export --output /tmp/test.json --format json
 ./target/release/beeport-stamp-stats $DB export --output /tmp/test.csv --format csv
 
@@ -755,7 +755,7 @@ head /tmp/test.csv
 ```bash
 # Test briefly in background
 ./target/release/beeport-stamp-stats \
-  --database-url "postgresql://localhost/beeport4_testing" \
+  --database-url "postgresql://localhost/beeport_bandwidth_testing_testing" \
   follow --poll-interval 5 &
 sleep 15
 kill $!
@@ -769,7 +769,7 @@ kill $!
 # Create test config file
 cat > test-config.yaml <<EOF
 database:
-  url: "postgresql://localhost/beeport4_testing"
+  url: "postgresql://localhost/beeport_bandwidth_testing_testing"
 blockchain:
   chunk_size: 1000
 EOF
@@ -778,13 +778,13 @@ EOF
 ./target/release/beeport-stamp-stats --config test-config.yaml fetch --from-block <start> --to-block <end>
 
 # Test environment variable override
-BEEPORT__DATABASE__URL="postgresql://localhost/beeport4_env_test" \
+BEEPORT__DATABASE__URL="postgresql://localhost/beeport_bandwidth_testing_env_test" \
   ./target/release/beeport-stamp-stats --config test-config.yaml fetch --from-block <start> --to-block <end>
 
 # Test CLI argument override (highest priority)
-BEEPORT__DATABASE__URL="postgresql://localhost/beeport4_env_test" \
+BEEPORT__DATABASE__URL="postgresql://localhost/beeport_bandwidth_testing_env_test" \
   ./target/release/beeport-stamp-stats --config test-config.yaml \
-  --database-url "postgresql://localhost/beeport4_testing" \
+  --database-url "postgresql://localhost/beeport_bandwidth_testing_testing" \
   fetch --from-block <start> --to-block <end>
 ```
 - Verify config file loads correctly

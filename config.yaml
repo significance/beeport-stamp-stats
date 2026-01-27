@@ -1,6 +1,13 @@
 database:
   path: "postgresql://localhost/beeport3m"
 
+payment_channel_factories:
+  - name: "SimpleSwapFactory-Gnosis"
+    address: "0xc2d5a532cf69aa9a1378737d8ccdef884b6e7420"
+    deployment_block: 20000000
+    network: "gnosis"
+    active: true
+
 rpc:
   endpoints:
     # Official Gnosis Chain RPC

@@ -322,6 +322,10 @@ pub enum Commands {
         /// Specific factory to scan (defaults to all active factories)
         #[arg(long)]
         factory: Option<String>,
+
+        /// Number of parallel issuer lookups (default: 10)
+        #[arg(long, default_value = "10")]
+        parallel_batch_size: usize,
     },
 
     /// Sync events from discovered chequebook contracts
@@ -353,7 +357,8 @@ pub enum Commands {
     /// Analyze cheque cashing activity per chequebook
     ///
     /// Shows total cheques cashed and amounts per chequebook over a specified block range.
-    ChequeSummary {
+    #[command(name = "cheque-summary-by-address")]
+    ChequeSummaryByAddress {
         /// Start block number
         #[arg(long)]
         from_block: Option<u64>,
@@ -383,7 +388,8 @@ pub enum Commands {
     /// Display payment channel activity summary grouped by time period
     ///
     /// Shows cheque cashing activity statistics grouped by day/week/month.
-    PaymentChannelSummary {
+    #[command(name = "cheque-summary-by-period")]
+    ChequeSummaryByPeriod {
         /// Group statistics by time period
         #[arg(long, default_value = "week")]
         group_by: GroupBy,
@@ -750,6 +756,7 @@ impl Cli {
                 to_block,
                 refresh,
                 factory,
+                parallel_batch_size,
             } => {
                 self.execute_discover_chequebooks(
                     cache,
@@ -759,6 +766,7 @@ impl Cli {
                     *to_block,
                     *refresh,
                     factory.clone(),
+                    *parallel_batch_size,
                 )
                 .await
             }
@@ -781,20 +789,20 @@ impl Cli {
                 )
                 .await
             }
-            Commands::ChequeSummary {
+            Commands::ChequeSummaryByAddress {
                 from_block,
                 to_block,
                 output,
             } => {
-                self.execute_cheque_summary(cache, *from_block, *to_block, output.clone())
+                self.execute_cheque_summary_by_address(cache, *from_block, *to_block, output.clone())
                     .await
             }
             Commands::ChequebookBalances { output, refresh } => {
                 self.execute_chequebook_balances(cache, client, &config, output.clone(), *refresh)
                     .await
             }
-            Commands::PaymentChannelSummary { group_by, months } => {
-                self.execute_payment_channel_summary(cache, group_by.clone(), *months)
+            Commands::ChequeSummaryByPeriod { group_by, months } => {
+                self.execute_cheque_summary_by_period(cache, group_by.clone(), *months)
                     .await
             }
         }?;
@@ -1418,8 +1426,12 @@ impl Cli {
         to_block: Option<u64>,
         refresh: bool,
         factory_filter: Option<String>,
+        parallel_batch_size: usize,
     ) -> Result<()> {
         use crate::contracts::impls::SimpleSwapFactoryContract;
+        use futures::future::join_all;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
 
         tracing::info!("Discovering chequebooks from factory contracts...");
 
@@ -1487,10 +1499,16 @@ impl Cli {
                 }
             );
 
-            // Fetch deployment events with incremental storage
+            // Shared counters for progress tracking
+            let stored_count = Arc::new(AtomicUsize::new(0));
+            let issuer_count = Arc::new(AtomicUsize::new(0));
+
+            // Fetch deployment events with incremental storage and parallel issuer lookups
             let cache_clone = cache.clone();
             let client_clone = client.clone();
             let retry_config = config.retry.clone();
+            let stored_count_clone = stored_count.clone();
+            let issuer_count_clone = issuer_count.clone();
             let deployments = client
                 .fetch_factory_deployment_events(
                     from,
@@ -1504,23 +1522,61 @@ impl Cli {
                         let cache = cache_clone.clone();
                         let client = client_clone.clone();
                         let retry = retry_config.clone();
+                        let stored_count = stored_count_clone.clone();
+                        let issuer_count = issuer_count_clone.clone();
+                        let batch_size = parallel_batch_size;
                         async move {
-                            // Store deployments from this chunk immediately
-                            // Also populate issuer address from RPC
+                            // First store all deployments
                             for deployment in &chunk_deployments {
-                                // First store the deployment
                                 cache.store_chequebook_deployment(deployment).await?;
+                                stored_count.fetch_add(1, Ordering::Relaxed);
+                            }
 
-                                // Then query and update issuer address
-                                match client.get_chequebook_issuer(&deployment.chequebook_address, &retry).await {
-                                    Ok(issuer) => {
-                                        tracing::debug!("Got issuer {} for chequebook {}", issuer, deployment.chequebook_address);
-                                        cache.update_chequebook_issuer(&deployment.chequebook_address, &issuer).await?;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Failed to get issuer for {}: {}", deployment.chequebook_address, e);
-                                    }
-                                }
+                            // Then fetch issuers in parallel batches
+                            for batch in chunk_deployments.chunks(batch_size) {
+                                let futures: Vec<_> = batch
+                                    .iter()
+                                    .map(|deployment| {
+                                        let client = client.clone();
+                                        let cache = cache.clone();
+                                        let retry = retry.clone();
+                                        let address = deployment.chequebook_address.clone();
+                                        async move {
+                                            match client.get_chequebook_issuer(&address, &retry).await {
+                                                Ok(issuer) => {
+                                                    tracing::debug!(
+                                                        "Got issuer {} for chequebook {}",
+                                                        issuer,
+                                                        address
+                                                    );
+                                                    if let Err(e) = cache
+                                                        .update_chequebook_issuer(&address, &issuer)
+                                                        .await
+                                                    {
+                                                        tracing::warn!(
+                                                            "Failed to update issuer for {}: {}",
+                                                            address,
+                                                            e
+                                                        );
+                                                    }
+                                                    true
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        "Failed to get issuer for {}: {}",
+                                                        address,
+                                                        e
+                                                    );
+                                                    false
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .collect();
+
+                                let results = join_all(futures).await;
+                                let successful = results.iter().filter(|&&r| r).count();
+                                issuer_count.fetch_add(successful, Ordering::Relaxed);
                             }
 
                             tracing::debug!(
@@ -1539,10 +1595,12 @@ impl Cli {
             if deployments.is_empty() {
                 println!("   ℹ️  No new deployments found\n");
             } else {
+                let issuers_fetched = issuer_count.load(Ordering::Relaxed);
                 println!(
-                    "   ✅ Discovered {} chequebook{}\n",
+                    "   ✅ Discovered {} chequebook{} ({} issuers fetched)\n",
                     deployments.len(),
-                    if deployments.len() == 1 { "" } else { "s" }
+                    if deployments.len() == 1 { "" } else { "s" },
+                    issuers_fetched
                 );
 
                 // Show first few discovered addresses
@@ -1747,7 +1805,7 @@ impl Cli {
         Ok(())
     }
 
-    async fn execute_cheque_summary(
+    async fn execute_cheque_summary_by_address(
         &self,
         cache: Cache,
         from_block: Option<u64>,
@@ -1959,7 +2017,7 @@ impl Cli {
         Ok(())
     }
 
-    async fn execute_payment_channel_summary(
+    async fn execute_cheque_summary_by_period(
         &self,
         cache: Cache,
         group_by: GroupBy,

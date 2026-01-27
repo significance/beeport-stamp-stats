@@ -1,6 +1,6 @@
 # Beeport TX Stats - Project Plan
 
-**Last Updated:** 2026-01-25 20:41 UTC (comprehensive testing completed)
+**Last Updated:** 2026-01-27 00:49 UTC
 
 ---
 
@@ -10,7 +10,64 @@
 **Goal:** Improve retrieval efficiency for postage batch data collection
 **Database:** `beeport_bandwidth_testing` (PostgreSQL, for testing)
 
-**Project State:** ✅ Comprehensive Testing Complete
+**Project State:** ✅ DRY Refactoring Complete & Tested
+
+### Completed Task: DRY Refactoring (2026-01-26)
+
+**Problem:** `discover-chequebooks` and `sync-chequebooks` used different fetching patterns:
+- `discover-chequebooks`: Sequential factory processing, no multi-RPC scheduler support
+- `sync-chequebooks`: Parallel batch processing with `join_all`, but also no scheduler support
+
+**Solution - All Complete:**
+1. ✅ Add multi-RPC scheduler support to `fetch_factory_deployment_events`
+2. ✅ Add multi-RPC scheduler support to `fetch_chequebook_events`
+3. ✅ Add parallel batch processing to `discover-chequebooks` CLI command
+4. ✅ Extract common chunked-fetching logic to reduce duplication
+5. ✅ Rename confusingly named commands (`cheque-summary` → `cheque-summary-by-address`, `payment-channel-summary` → `cheque-summary-by-period`)
+
+**Changes Made:**
+- Created 4 new helper methods in `blockchain.rs`:
+  - `collect_chunks_to_fetch()` - Collects chunks not in cache
+  - `fetch_logs_for_chunks()` - Fetches logs with scheduler or single-RPC support
+  - `get_block_range()` - Adjusts block range for contract deployment
+  - `get_block_timestamp_cached()` - Gets timestamp with caching (memory, DB, RPC)
+- Refactored 4 fetch methods to use helpers:
+  - `fetch_contract_events()` - Reduced from ~400 to ~100 lines
+  - `fetch_factory_deployment_events()` - Now uses scheduler support
+  - `fetch_chequebook_events()` - Now uses scheduler support
+  - `fetch_storage_incentives_contract_events()` - Reduced duplication
+- Updated `parse_log()` and `parse_storage_incentives_log()` to use `get_block_timestamp_cached()`
+- Added `--parallel-batch-size` parameter to `discover-chequebooks` command
+- Added parallel issuer lookups using `futures::join_all`
+- Renamed commands for clarity:
+  - `cheque-summary` → `cheque-summary-by-address` (shows per-chequebook stats)
+  - `payment-channel-summary` → `cheque-summary-by-period` (shows time-grouped stats)
+
+**Code Reduction:** ~600 lines of duplicated code eliminated
+
+### ✅ Comprehensive Testing Complete (2026-01-27 00:49 UTC)
+
+| Test | Status | Notes |
+|------|--------|-------|
+| Unit tests | ✅ 86 passed | `cargo test --lib` |
+| Clippy | ✅ 0 warnings | `cargo clippy -- -D warnings` |
+| `summary` | ✅ Working | Multi-RPC mode, 2724 events loaded |
+| `batch-status` | ✅ Working | TTL calculations, caching |
+| `expiry-analytics` | ✅ Working | Period grouping |
+| `export` | ✅ Working | 24,247 events exported |
+| `price` | ✅ Working | Current price: 103,267 PLUR |
+| `address-summary` | ✅ Working | Role filtering, min-stamps |
+| `discover-chequebooks` | ✅ Working | `--parallel-batch-size` param added |
+| `sync-chequebooks` | ✅ Working | Parallel batch processing (10 at a time) |
+| `chequebook-balances` | ✅ Working | Balance retrieval for 35,238 chequebooks |
+| `cheque-summary-by-address` | ✅ Working | Renamed from `cheque-summary` |
+| `cheque-summary-by-period` | ✅ Working | Renamed from `payment-channel-summary`, shows weekly stats |
+
+**Multi-RPC Scheduler:** Verified working with 4 endpoints (rpc.gnosischain.com, gnosis-rpc.publicnode.com, xdai.fairdatasociety.org, localhost:8545)
+
+---
+
+**Previous State:** ✅ Comprehensive Testing Complete
 
 **Testing Session (2026-01-25 20:41 UTC):**
 - ✅ 86 unit tests passing
