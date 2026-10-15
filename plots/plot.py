@@ -13,7 +13,7 @@ plt.style.use('dark_background')
 load_dotenv()
 
 def fetch_and_plot_metrics(export_filename=None):
-    dbname = os.getenv("DB_NAME", "beeport2")
+    dbname = os.getenv("DB_NAME", "beeport_tx_prod")
     user = os.getenv("DB_USER", "sig32")
     password = os.getenv("DB_PASS", "")
     host = os.getenv("DB_HOST", "localhost")
