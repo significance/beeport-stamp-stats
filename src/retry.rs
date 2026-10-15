@@ -25,6 +25,30 @@ pub struct RetryConfig {
     pub extended_retry_wait_seconds: u64,
 }
 
+/// Is this error worth retrying?
+///
+/// Public RPC endpoints fail in more ways than a 429: load balancers return 503/504 and
+/// drop connections mid-request. All of those are transient. Errors are matched on their
+/// message text because they arrive as strings from alloy's transport layer.
+pub fn is_transient_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    msg.contains("429")
+        || msg.contains("502")
+        || msg.contains("503")
+        || msg.contains("504")
+        || lower.contains("too many requests")
+        || lower.contains("rate limit")
+        || lower.contains("bad gateway")
+        || lower.contains("service unavailable")
+        || lower.contains("gateway timeout")
+        || lower.contains("connection termination")
+        || lower.contains("connection reset")
+        || lower.contains("connection failure")
+        || lower.contains("connection closed")
+        || lower.contains("timed out")
+        || lower.contains("error sending request")
+}
+
 impl Default for RetryConfig {
     fn default() -> Self {
         Self {
@@ -101,9 +125,8 @@ impl RetryConfig {
                     Err(e) => {
                         let error_msg = e.to_string();
 
-                        // Check if this is a rate limit or gateway error
-                        if error_msg.contains("429") || error_msg.contains("Too Many Requests")
-                            || error_msg.contains("502") || error_msg.contains("Bad Gateway") {
+                        // Check if this is a rate limit, gateway, or transport error
+                        if is_transient_error(&error_msg) {
                             if retries < self.max_retries {
                                 // Calculate exponential backoff delay
                                 let delay_ms = self
@@ -112,7 +135,7 @@ impl RetryConfig {
 
                                 let now = chrono::Local::now().format("%H:%M:%S");
                                 tracing::debug!(
-                                    "[{}] Retryable error (429/502), retrying after {}ms (attempt {}/{})",
+                                    "[{}] Transient RPC error, retrying after {}ms (attempt {}/{})",
                                     now,
                                     delay_ms,
                                     retries + 1,
@@ -242,6 +265,23 @@ impl RetryConfig {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_is_transient_error_classification() {
+        // What public Gnosis RPCs actually returned on 2026-10-15
+        assert!(is_transient_error(
+            "Failed to get block: HTTP error 503 with body: upstream connect error or disconnect/reset before headers. reset reason: connection termination"
+        ));
+        assert!(is_transient_error("HTTP error 429 Too Many Requests"));
+        assert!(is_transient_error("HTTP error 502 Bad Gateway"));
+        assert!(is_transient_error("HTTP error 504 Gateway Timeout"));
+        assert!(is_transient_error("error sending request for url"));
+        assert!(is_transient_error("operation timed out"));
+        // Permanent failures must not be retried
+        assert!(!is_transient_error("Invalid contract address"));
+        assert!(!is_transient_error("Block 12345 not found"));
+        assert!(!is_transient_error("HTTP error 401 Unauthorized"));
+    }
 
     #[tokio::test]
     async fn test_retry_success_first_attempt() {

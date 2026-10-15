@@ -182,12 +182,16 @@ impl RpcScheduler {
         F: Future<Output = Result<T>>,
         T: Send + 'static,
     {
-        const MAX_RATE_LIMIT_RETRIES: usize = 5;
+        // A multi-hour sync must survive every endpoint being briefly unavailable at once,
+        // so transient failures across the whole pool are retried with growing delays
+        // (3s, 6s, 12s, ... capped at 60s) before giving up.
+        const MAX_RATE_LIMIT_RETRIES: usize = 10;
         const RATE_LIMIT_RETRY_DELAY_SECS: u64 = 3;
+        const MAX_RETRY_DELAY_SECS: u64 = 60;
 
         let num_endpoints = self.endpoints.len();
 
-        // Outer retry loop for when all endpoints hit rate limits
+        // Outer retry loop for when all endpoints fail transiently (rate limit or network)
         for rate_limit_retry in 0..MAX_RATE_LIMIT_RETRIES {
             let start_index = self
                 .next_endpoint_index
@@ -273,29 +277,30 @@ impl RpcScheduler {
                 return Err(StampError::DataUnavailable(
                     last_error.unwrap_or_else(|| "Data pruned on all RPC endpoints".to_string())
                 ));
-            } else if rate_limit_error_count == num_endpoints {
-                // All endpoints hit rate limits - wait and retry
+            } else if rate_limit_error_count + network_error_count == num_endpoints {
+                // Every endpoint failed transiently (rate limited or unreachable) - wait and retry
                 if rate_limit_retry < MAX_RATE_LIMIT_RETRIES - 1 {
+                    let delay = (RATE_LIMIT_RETRY_DELAY_SECS << rate_limit_retry.min(5))
+                        .min(MAX_RETRY_DELAY_SECS);
                     tracing::warn!(
-                        "All {} RPC endpoints hit rate limits, waiting {}s before retry {}/{}",
+                        "All {} RPC endpoints failed transiently ({} rate-limited, {} network), waiting {}s before retry {}/{}: {}",
                         num_endpoints,
-                        RATE_LIMIT_RETRY_DELAY_SECS,
+                        rate_limit_error_count,
+                        network_error_count,
+                        delay,
                         rate_limit_retry + 1,
-                        MAX_RATE_LIMIT_RETRIES
+                        MAX_RATE_LIMIT_RETRIES,
+                        last_error.as_deref().unwrap_or("")
                     );
-                    tokio::time::sleep(tokio::time::Duration::from_secs(RATE_LIMIT_RETRY_DELAY_SECS)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
                     continue; // Retry all endpoints
                 } else {
                     // Max retries exhausted
-                    return Err(StampError::Rpc(
-                        format!("All RPC endpoints exhausted rate limits after {MAX_RATE_LIMIT_RETRIES} retries")
-                    ));
+                    return Err(StampError::Rpc(format!(
+                        "All RPC endpoints failed transiently after {MAX_RATE_LIMIT_RETRIES} retries: {}",
+                        last_error.unwrap_or_default()
+                    )));
                 }
-            } else if network_error_count == num_endpoints {
-                // All endpoints had network errors
-                return Err(StampError::Rpc(
-                    last_error.unwrap_or_else(|| "All RPC endpoints had network errors".to_string())
-                ));
             } else {
                 // Mixed errors or other failures
                 return Err(StampError::Rpc(
@@ -412,10 +417,21 @@ fn is_network_error(error: &StampError) -> bool {
                 || msg_lower.contains("connection refused")
                 || msg_lower.contains("connection closed")
                 || msg_lower.contains("connection timeout")
+                || msg_lower.contains("connection termination")
+                || msg_lower.contains("connection failure")
+                || msg_lower.contains("upstream connect error")
+                || msg_lower.contains("disconnect/reset")
                 || msg_lower.contains("timed out")
                 || msg_lower.contains("network")
                 || msg_lower.contains("dns")
                 || msg_lower.contains("tcp")
+                // Load-balancer / gateway failures from public endpoints
+                || msg.contains("502")
+                || msg.contains("503")
+                || msg.contains("504")
+                || msg_lower.contains("bad gateway")
+                || msg_lower.contains("service unavailable")
+                || msg_lower.contains("gateway timeout")
         }
         _ => false,
     }
