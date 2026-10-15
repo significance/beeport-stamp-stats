@@ -79,6 +79,25 @@
 - 16:25 `sync` running with the fixed binary: stamps topped up (+262), storage incentives from
   44,267,042 → 48,772,053 (PriceOracle first). Several hours. Uncommitted: config.rs,
   contracts/mod.rs, this file, state.md.
+- 16:33 that sync died: Postgres "No space left on device" (disk briefly hit 0; 20 GB free an
+  hour later, so macOS purgeable space). It had finished PriceOracle to 47.97M only. 16:35
+  restarted; 17:17 COMPLETE at head (91,436 SI events, price 186,952) — but because the resume
+  point was the table-wide max, StakeRegistry and Redistribution were fetched only from
+  47,969,000, leaving a 3.7M-block hole (44.27M–47.97M) for those two.
+- Fixed: resume point is now per contract (`get_last_storage_incentives_block_for(address)`),
+  `execute_sync` loops contracts individually via `fetch_storage_incentives_contract_events`
+  (now `pub(crate)`). Falls back to the contract's deployment block when it has no rows.
+  89 tests, clippy clean, release rebuilt. ~17:25 sync started to fill the hole.
+  Note: `target/` is 5 GB (4.1 GB debug); the first SI pass over 3.7M blocks took ~8 min at
+  4×50 req/s with zero errors, so the earlier "hours" estimate was far too pessimistic for the
+  SI contracts; Redistribution is the dense one.
+- 19:21 `sync --contract` implemented (was parsed and ignored): a storage-incentives name syncs
+  that contract alone, a stamp name runs the stamp pass, unknown names are rejected. Used it to
+  fill the hole: StakeRegistry 44,251,993–47,968,999 done 19:28 (1,152 events, 7 min);
+  Redistribution 44,264,608–47,968,999 running (~27k blocks/min, ~2 h).
+- 19:35 the 17 txs with NULL `from_address` from the 503 outage were backfilled with a one-off
+  script (`eth_getTransactionByHash` → `UPDATE events`). Zero NULL senders remain above 44.26M.
+  Debug note: publicnode returns 403 to Python's default user-agent; send a curl-like one.
 - README rewritten to match this branch (commands, options, config schema, contract table, tables).
 - `plots/plot.py` verified working (headless render against `beeport_tx_prod`, ~15 s). It was the
   source of the ".env" memory: it reads `DB_NAME`/`DB_USER`/… via python-dotenv and defaulted to the

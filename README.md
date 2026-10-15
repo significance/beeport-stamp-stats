@@ -64,17 +64,19 @@ Global options go before the subcommand: `--config <file>` (env `BEEPORT_CONFIG`
 | Command | What it does | Options |
 |---|---|---|
 | `fetch` | Fetch events for a block range and print them | `--from-block` (default: PostageStamp deployment), `--to-block` (default: chain head), `--incremental`, `--refresh`, `--max-retries`, `--initial-delay-ms` |
-| `sync` | Resume from the last stored block to chain head, quietly; also caches the current price | `--from-block`, `--to-block`, `--refresh`. `--contract` is accepted but currently ignored |
+| `sync` | Resume from the last stored block to chain head, quietly; also caches the current price | `--from-block`, `--to-block`, `--refresh`, `--contract <name>` (a storage-incentives name syncs that contract alone; a postage-stamp name runs the postage-stamp pass) |
 | `follow` | `sync`, then poll for new blocks forever | `--poll-interval <secs>` (12), `--display` |
 | `price` | Print the current storage price from the PriceOracle | |
 | `migrations` | Show which schema migrations have been applied | |
 | `reset` | Drop and recreate the database. **Destructive**, asks for confirmation | |
 
 `fetch` and `sync` cover all five event contracts: postage-stamp contracts first, then the
-storage-incentives contracts. `sync` resumes each group from its own table's highest block, so
-the two can be at different heights. (`follow` currently polls the stamp contracts only.) Fetched
-block ranges are remembered per contract in `rpc_cache` so re-running over a covered range is
-cheap; `--refresh` forces re-processing.
+storage-incentives contracts one by one. `sync` resumes the postage-stamp pass from the `events`
+table's highest block and each storage-incentives contract from its own highest block, so a run
+that dies part-way leaves no hole on the next run. (`follow` currently polls the stamp contracts
+only.) Fetched block ranges are remembered per contract in `rpc_cache` so re-running over a
+covered range is cheap; `--refresh` forces re-processing. To fill a known gap for one contract:
+`sync --contract Redistribution --from-block N --to-block M`.
 
 ### Analysing stamps
 
@@ -272,8 +274,8 @@ Adding a contract is config plus an ABI, parser and registry entry; the walkthro
 
 - Public RPCs throttle hard; a year of blocks takes hours. Every event also costs one
   `eth_getTransactionByHash` to record the sender.
-- `sync --contract` is parsed but ignored; all contracts are synced.
 - `follow` only polls the postage-stamp contracts; run `sync` to update storage-incentives data.
+- `sync --contract PostageStamp` runs both postage-stamp contracts, not just the one named.
 - `batch_balances` is only populated by `--refresh`, which is slow, so TTL figures for old
   batches are approximate until a refresh runs.
 - `rate_limiter.rs` (v1) still exists alongside v2 and should be deleted.
