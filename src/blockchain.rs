@@ -1138,7 +1138,7 @@ impl BlockchainClient {
     ///
     /// If `refresh` is true, cached chunks will be reprocessed (useful after adding new event types).
     #[allow(clippy::too_many_arguments)]
-    async fn fetch_storage_incentives_contract_events<F, Fut>(
+    pub(crate) async fn fetch_storage_incentives_contract_events<F, Fut>(
         &self,
         contract: &dyn StorageIncentivesContract,
         from_block: u64,

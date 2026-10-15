@@ -1222,10 +1222,30 @@ impl Cli {
         config: &AppConfig,
         from_block: Option<u64>,
         to_block: Option<u64>,
-        _contract: Option<String>,
+        contract: Option<String>,
         refresh: bool,
     ) -> Result<()> {
         tracing::info!("Syncing database with blockchain...");
+
+        // --contract restricts the run. A storage-incentives name selects that one
+        // contract; a postage-stamp name selects the whole postage-stamp pass (those
+        // contracts are fetched together).
+        let only = contract.as_deref();
+        let stamp_names: Vec<&str> = registry.all().iter().map(|c| c.name()).collect();
+        let si_names: Vec<&str> = si_registry.all().iter().map(|c| c.name()).collect();
+        if let Some(n) = only {
+            let known = stamp_names
+                .iter()
+                .chain(si_names.iter())
+                .any(|c| c.eq_ignore_ascii_case(n));
+            if !known {
+                return Err(anyhow::anyhow!(
+                    "Unknown contract '{n}'. Configured contracts: {}",
+                    stamp_names.iter().chain(si_names.iter()).copied().collect::<Vec<_>>().join(", ")
+                ));
+            }
+        }
+        let run_stamps = only.is_none_or(|n| stamp_names.iter().any(|c| c.eq_ignore_ascii_case(n)));
 
         // Determine start block
         let from = from_block
@@ -1251,77 +1271,98 @@ impl Cli {
         let cache_clone = cache.clone();
         let client_clone = client.clone();
         let retry_config = config.retry.clone();
-        let events = client
-            .fetch_batch_events(
-                from,
-                to,
-                &cache,
-                registry,
-                &config.blockchain,
-                &config.retry,
-                refresh,
-                |chunk_events: Vec<crate::events::StampEvent>| {
-                    let cache = cache_clone.clone();
-                    let client = client_clone.clone();
-                    let retry = retry_config.clone();
-                    async move {
-                        // Populate from_address for this chunk
-                        let mut events_with_from = chunk_events;
-                        client.populate_from_addresses(&mut events_with_from, &retry).await?;
+        let events = if run_stamps {
+            client
+                .fetch_batch_events(
+                    from,
+                    to,
+                    &cache,
+                    registry,
+                    &config.blockchain,
+                    &config.retry,
+                    refresh,
+                    |chunk_events: Vec<crate::events::StampEvent>| {
+                        let cache = cache_clone.clone();
+                        let client = client_clone.clone();
+                        let retry = retry_config.clone();
+                        async move {
+                            // Populate from_address for this chunk
+                            let mut events_with_from = chunk_events;
+                            client.populate_from_addresses(&mut events_with_from, &retry).await?;
 
-                        // Store events from this chunk (with from_address populated)
-                        cache.store_events(&events_with_from).await?;
+                            // Store events from this chunk (with from_address populated)
+                            cache.store_events(&events_with_from).await?;
 
-                        // Store batch info for BatchCreated events in this chunk
-                        let batches = client.fetch_batch_info(&events_with_from).await?;
-                        cache.store_batches(&batches).await?;
+                            // Store batch info for BatchCreated events in this chunk
+                            let batches = client.fetch_batch_info(&events_with_from).await?;
+                            cache.store_batches(&batches).await?;
 
-                        Ok(())
-                    }
-                },
-            )
-            .await?;
+                            Ok(())
+                        }
+                    },
+                )
+                .await?
+        } else {
+            tracing::info!("Skipping postage stamp contracts (--contract given)");
+            Vec::new()
+        };
 
         tracing::info!("Found {} new postage stamp events", events.len());
 
         // Count batches for display (already stored incrementally)
         let batch_count = events.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
 
-        // Storage incentives contracts resume from their own table's height: the two
-        // passes are independent and historically only `fetch` ran this one.
-        let si_from = match from_block {
-            Some(b) => b,
-            None => cache
-                .get_last_storage_incentives_block()
-                .await?
-                .map(|b| b + 1)
-                .unwrap_or(from),
-        };
-        tracing::info!("Syncing storage incentives contracts from block {si_from} to {to}");
-
+        // Storage incentives contracts are fetched one after another and each resumes
+        // from its own highest stored block, so a run that dies between contracts
+        // leaves no hole. Historically only `fetch` ran this pass at all.
         let cache_clone = cache.clone();
-        let si_events = client
-            .fetch_storage_incentives_events(
+        let mut si_events: Vec<crate::events::StorageIncentivesEvent> = Vec::new();
+        for contract in si_registry.all() {
+            if only.is_some_and(|n| !contract.name().eq_ignore_ascii_case(n)) {
+                continue;
+            }
+            let si_from = match from_block {
+                Some(b) => b,
+                None => cache
+                    .get_last_storage_incentives_block_for(contract.address())
+                    .await?
+                    .map(|b| b + 1)
+                    .unwrap_or_else(|| contract.deployment_block()),
+            };
+            if si_from > to {
+                tracing::info!("{} already at block {}", contract.name(), to);
+                continue;
+            }
+            tracing::info!(
+                "Syncing {} from block {} to {}",
+                contract.name(),
                 si_from,
-                to,
-                &cache,
-                si_registry,
-                &config.blockchain,
-                &config.retry,
-                refresh,
-                |chunk_events: Vec<crate::events::StorageIncentivesEvent>| {
-                    let cache = cache_clone.clone();
-                    async move {
-                        cache.store_storage_incentives_events(&chunk_events).await?;
-                        tracing::debug!(
-                            "Stored {} storage incentives events from chunk",
-                            chunk_events.len()
-                        );
-                        Ok(())
-                    }
-                },
-            )
-            .await?;
+                to
+            );
+            let events = client
+                .fetch_storage_incentives_contract_events(
+                    contract.as_ref(),
+                    si_from,
+                    to,
+                    &cache,
+                    &config.blockchain,
+                    &config.retry,
+                    refresh,
+                    |chunk_events: Vec<crate::events::StorageIncentivesEvent>| {
+                        let cache = cache_clone.clone();
+                        async move {
+                            cache.store_storage_incentives_events(&chunk_events).await?;
+                            tracing::debug!(
+                                "Stored {} storage incentives events from chunk",
+                                chunk_events.len()
+                            );
+                            Ok(())
+                        }
+                    },
+                )
+                .await?;
+            si_events.extend(events);
+        }
 
         tracing::info!("Found {} new storage incentives events", si_events.len());
 
