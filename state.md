@@ -27,10 +27,10 @@ Claude Code transcripts for this project were deleted. `plan.md`, `CLAUDE.md`,
 |---|---|
 | Remote | `git@github.com:significance/beeport-stamp-stats.git` |
 | Branch | `feat/improve-retrieval-efficiency-with-bandwidth` |
-| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-15, in sync |
+| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-15 ~16:10 UTC, in sync |
 | Working tree | clean, apart from 4 untracked junk files (`Reports Dashboard.xlsx`, `history.txt`, `note.txt`, `rpc-api-keys.txt`) deliberately not committed |
-| Latest commits | 2026-10-15: `fix: expiry-analytics balance fallback, Hour period, clippy cleanups` then `docs: add state.md, update plan`; before that `138dd2b docs: add architecture review` (2026-02-12) |
-| Ahead of `main` | 27 commits; `main` last moved 2026-01-10 |
+| Latest commits | 2026-10-15, newest first: `docs: update plan and state`, `docs: rewrite README for this branch, document plots`, `config: fix StampsRegistry address, add config-prod.yaml`, `fix: retry 503/504 and dropped connections`, `fix: sync resolves chain head and now covers storage-incentives contracts`; earlier today `9aa95e2`, `7853dee` |
+| Ahead of `main` | 32 commits; `main` last moved 2026-01-10 |
 | PR for this branch | none |
 | Open PRs | #4 investigate-addresses, #5 address-tracking-phase2, #6 improve-retrieval-efficiency. All superseded by this branch. |
 | Diverged branch | `feat/improve-retrieval-efficiency`: 8 local unpushed, 3 remote unpulled. Inspect before merging anything. |
@@ -83,9 +83,26 @@ Loose files in the project root (gitignored): `price-updates.csv` 16 MB, `events
 `balances.csv`, `stamp-cache.db`, `beeport_test_2.db` (24–25 Jan 2026), and 1.6 GB of `.sql` dumps
 also duplicated in `../beeport-tx-stats`.
 
+## In flight (2026-10-15)
+
+- Stamp events in `beeport_tx_prod` are CURRENT (48,768,672, finished 15:16 UTC).
+- Storage-incentives events are still at 44,267,041 because `sync` never fetched them (fixed in
+  the working tree, see plan.md). Catch-up is two steps:
+  1. RUNNING since 16:04: `fetch --from-block 44264608 --to-block 45408557` (StampsRegistry
+     backfill + storage incentives for that range).
+  2. Then: `./target/release/beeport-stamp-stats --config config-prod.yaml sync` carries the
+     storage-incentives tables from 45,408,558 to head. Several hours.
+- Afterwards: backfill 17 NULL `from_address` rows in blocks 45,780,202–45,780,551, and
+  re-render `plots/incentives_hero_dashboard.png`.
+- Everything above is committed and pushed. Tests 88 pass, clippy clean, release binary built
+  from this tree.
+
 ## Known problems
 
-1. `expiry-analytics` fix is written and tested but uncommitted. Phase 3 (parallel balance refresh or a
+0. FIXED 2026-10-15, uncommitted: `sync`/factory/chequebook runs with no `--to-block` walked to block
+   9.2e18 because the January i64 "fix" broke the `u64::MAX` = latest sentinel. Now resolved via
+   `get_current_block()`.
+1. `expiry-analytics` fix is committed (7853dee); Phase 3 balance refresh still not started. Phase 3 (parallel balance refresh or a
    `refresh-balances` command) not started.
 2. Two rate limiters coexist; `rate_limiter.rs` (v1) should go, keep `rate_limiter_v2.rs`.
 3. Temp files and the misleading `rpc-api-keys.txt` are not gitignored.

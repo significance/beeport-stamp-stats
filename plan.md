@@ -31,6 +31,49 @@
 - Known, not fixed: `cargo clippy --all-targets` flags "items after a test module" in `src/contracts/impls.rs:185` (pre-existing; move the `mod tests` block to the end of the file when touching that file).
 - All of the above plus the Phase 1/2 expiry-analytics changes remain UNCOMMITTED, awaiting the user's go-ahead.
 
+**2026-10-15 09:00 UTC — first real run in 8 months; sync bug found and fixed:**
+- `sync` with no `--to-block` walked chunks to block 9.2e18 ("Chunk n/4611686018405256"). Cause: commit
+  195ca6a (2026-01-25) changed the default from `u64::MAX` to `i64::MAX as u64` to keep SQL i64 bindings
+  happy, but `blockchain.rs` only treats `u64::MAX` as "resolve to chain head", so the new value was taken
+  literally. Same bug in factory discovery and chequebook sync. Fix: all three now call
+  `client.get_current_block()` once up front and pass a real block number (no sentinel at all).
+  The aborted run wrote nothing to the database (verified: max block and rpc_cache unchanged).
+- Added `config-prod.yaml`: same as `config.yaml` but database `beeport_tx_prod` (the one with price
+  history), no `localhost:8545` endpoint (no local node), chunk_size 2000. Running `migrations` against
+  prod applied 20260119000009 and 20260121000009 (new empty tables only).
+- Sync of `beeport_tx_prod` from 44,264,608 to chain head 48,766,631 started 08:45 UTC over three
+  public RPCs; log in the session scratchpad `sync-prod.log`.
+- 09:16 restarted with a 4th endpoint (gateway.fm) from 45,002,566. 09:40 restarted again from
+  45,408,558 after finding `config.yaml` had a dead StampsRegistry address (`0xCfC2…`, no code on
+  chain); corrected to `0x5EBf…` / 42,390,510 in `config.yaml` and `config-prod.yaml`.
+  **TODO after the sync finishes:** backfill StampsRegistry for 44,264,608–45,408,557 with
+  `fetch --from-block 44264608 --to-block 45408557` (PostageStamp chunks are in `rpc_cache` and skip).
+- 10:08 sync died at block 45,780,551: one endpoint returned HTTP 503 "connection termination" for
+  ~30 s. `rpc_scheduler::is_network_error` matched none of those strings, so the error was treated
+  as permanent, and even an all-endpoints-transient outcome returned immediately. Fixed: both
+  `retry::is_transient_error` (new, single-RPC path) and the scheduler classifier now cover
+  502/503/504, "connection termination/failure", "upstream connect error", "disconnect/reset";
+  the scheduler's outer loop retries any all-transient round with backoff 3s→60s, up to 10 times.
+  Unit test added. 10:40 restarted from 45,780,552.
+  **TODO after sync:** 17 txs in blocks 45,780,202–45,780,551 were stored with `from_address` NULL
+  during the outage; backfill them (`SELECT transaction_hash FROM events WHERE from_address IS NULL
+  AND block_number > 44264607`).
+- 15:16 stamp sync COMPLETE: `events` at 48,768,672, 84,438 new events, price cached 187,439.
+  Then found `sync` never fetched the storage-incentives contracts (only `fetch` did), so
+  `storage_incentives_events` was still at 44,267,041. Fixed: `execute_sync` now runs the SI pass
+  too, resuming from `get_last_storage_incentives_block()` (new cache helper). `follow` still
+  stamps-only (documented as a limitation). 88 tests, clippy clean, release rebuilt.
+- 16:04 started step 1 of the catch-up: `fetch --from-block 44264608 --to-block 45408557`
+  (StampsRegistry backfill + SI for that range). Step 2 after it finishes: plain `sync`, which
+  will carry SI from 45,408,558 to head. Then re-render the graph and backfill the 17 NULL senders.
+- README rewritten to match this branch (commands, options, config schema, contract table, tables).
+- `plots/plot.py` verified working (headless render against `beeport_tx_prod`, ~15 s). It was the
+  source of the ".env" memory: it reads `DB_NAME`/`DB_USER`/… via python-dotenv and defaulted to the
+  vanished `beeport2`; default now `beeport_tx_prod`. Added `plots/README.md`, `.env.example`,
+  `requirements.txt`, and a Plotting section in the main README. TODO: re-render the checked-in
+  `incentives_hero_dashboard.png` after the sync completes. Debug tip: the "Chunk n/N" burst at start
+  is the plan phase, not fetches; progress is best read from `SELECT max(block_number) FROM events`.
+
 **2026-10-12 12:30 UTC — env + data inventory (verified against Postgres):**
 - There is NO `.env` file and never was one in git. Config is YAML (`config.yaml` → `beeport3m`; `bandwidth-config.yaml` → `beeport_bandwidth`; `bandwidth-test-config.yaml` → `beeport_bandwidth_testing`), overridable with `BEEPORT__SECTION__KEY` env vars. `rpc-api-keys.txt` contains no keys, only a pasted Claude message listing providers. No secrets anywhere in the tree.
 - Real table names are `events` and `storage_incentives_events` (this file's older sections say `stamp_events`; that is wrong).
@@ -174,8 +217,12 @@ All core features implemented and tested:
 
 | Contract | Address | Deployment Block | Events |
 |----------|---------|------------------|--------|
-| **PostageStamp** (v1) | `0x6a1A21ECA3aB28BE85C7Ba22b2d6eAE5907c900e` | 20,685,974 | 9 types |
-| **StampsRegistry** (v2) | `0xCfC2FfF779E572990304bc5Da857087a3e576dd0` | 28,165,570 | 10 types |
+| **PostageStamp** | `0x45a1502382541Cd610CC9068e88727426b696293` | 31,306,385 | 6 types |
+| **StampsRegistry** | `0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3` | 42,390,510 | 6 types (+ payer) |
+
+(Corrected 2026-10-15. This table previously listed `0x6a1A…` and `0xCfC2…`; the latter has no code
+on Gnosis and had crept into `config.yaml`, so StampsRegistry fetched nothing. `0x6a1A…` is a real
+older PostageStamp deployment but is not tracked by any config.)
 | **PriceOracle** | `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b` | 37,339,168 | 2 types |
 | **StakeRegistry** | `0xda2a16EE889E7f04980A8d597b48c8D51B9518F4` | 40,430,237 | 5 types |
 | **Redistribution** | `0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d` | 41,105,199 | 11 types |
