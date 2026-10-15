@@ -461,6 +461,7 @@ pub enum OutputFormat {
 
 #[derive(Debug, Clone, clap::ValueEnum)]
 pub enum TimePeriod {
+    Hour,
     Day,
     Week,
     Month,
@@ -1439,10 +1440,9 @@ impl Cli {
             .collect();
 
         if factories.is_empty() {
-            if factory_filter.is_some() {
+            if let Some(filter) = factory_filter {
                 return Err(anyhow::anyhow!(
-                    "No factory found matching filter '{}'",
-                    factory_filter.unwrap()
+                    "No factory found matching filter '{filter}'"
                 ));
             } else {
                 println!("⚠️ No active payment channel factories configured.");
@@ -1826,7 +1826,7 @@ impl Cli {
                 total_amount: total.to_string(),
             })
             .collect();
-        results.sort_by(|a, b| b.total_cheques.cmp(&a.total_cheques));
+        results.sort_by_key(|r| std::cmp::Reverse(r.total_cheques));
 
         // Output results
         match output {
@@ -2217,7 +2217,7 @@ fn format_number(n: u128) -> String {
     let len = s.len();
 
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);

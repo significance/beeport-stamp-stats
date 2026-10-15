@@ -4,7 +4,7 @@ use crate::cli::{ExpiryAnalyticsSortBy, OutputFormat, TimePeriod};
 use crate::error::Result;
 use crate::events::BatchInfo;
 use crate::price::{blocks_to_days, calculate_ttl_blocks, PriceChange, PriceConfig};
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tabled::Tabled;
@@ -35,6 +35,15 @@ impl ExpiryPeriod {
     /// Format period based on time period type
     fn format_period(timestamp: DateTime<Utc>, period: &TimePeriod) -> (String, DateTime<Utc>) {
         match period {
+            TimePeriod::Hour => {
+                let formatted = timestamp.format("%Y-%m-%d %H:00").to_string();
+                let period_start = timestamp
+                    .date_naive()
+                    .and_hms_opt(timestamp.hour(), 0, 0)
+                    .unwrap()
+                    .and_utc();
+                (formatted, period_start)
+            }
             TimePeriod::Day => {
                 let formatted = timestamp.format("%Y-%m-%d").to_string();
                 let period_start = timestamp
@@ -77,7 +86,7 @@ impl ExpiryPeriod {
         let len = s.len();
 
         for (i, c) in s.chars().enumerate() {
-            if i > 0 && (len - i) % 3 == 0 {
+            if i > 0 && (len - i).is_multiple_of(3) {
                 result.push(',');
             }
             result.push(c);
@@ -196,15 +205,17 @@ pub async fn execute(
 
         // Get balance based on refresh flag
         let remaining_balance = if !refresh {
-            // When refresh=false, use cache exclusively or return "0" if not cached
+            // When refresh=false, use cache first, then fall back to stored normalised_balance
             if let Ok(Some(cached)) = cache.get_cached_balance(&batch.batch_id, _current_block, cache_validity_blocks).await {
                 cache_hits += 1;
                 tracing::debug!("Cache hit for batch {}", batch.batch_id);
                 cached
             } else {
                 cache_misses += 1;
-                tracing::debug!("No cached balance for batch {}, using 0", batch.batch_id);
-                "0".to_string() // Don't fetch from blockchain
+                // Fall back to stored normalised_balance (from creation or last event)
+                // Note: This may not reflect current on-chain state for old batches
+                tracing::debug!("No cached balance for batch {}, using stored normalised_balance", batch.batch_id);
+                batch.normalised_balance.clone()
             }
         } else {
             // When refresh=true, always fetch from blockchain
@@ -296,14 +307,9 @@ pub async fn execute(
 
     // Sort results
     match sort_by {
-        ExpiryAnalyticsSortBy::Period => {
-            periods.sort_by(|a, b| a.period_start.cmp(&b.period_start))
-        }
-        ExpiryAnalyticsSortBy::Chunks => {
-            periods.sort_by(|a, b| b.chunks_raw.cmp(&a.chunks_raw))
-        }
-        ExpiryAnalyticsSortBy::Storage => {
-            periods.sort_by(|a, b| b.chunks_raw.cmp(&a.chunks_raw))
+        ExpiryAnalyticsSortBy::Period => periods.sort_by_key(|p| p.period_start),
+        ExpiryAnalyticsSortBy::Chunks | ExpiryAnalyticsSortBy::Storage => {
+            periods.sort_by_key(|p| std::cmp::Reverse(p.chunks_raw))
         }
     }
 
@@ -342,6 +348,15 @@ pub async fn execute(
 mod tests {
     use super::*;
     use chrono::{TimeZone, Timelike};
+
+    #[test]
+    fn test_format_period_hour() {
+        let timestamp = Utc.with_ymd_and_hms(2025, 1, 15, 14, 30, 0).unwrap();
+        let (formatted, period_start) = ExpiryPeriod::format_period(timestamp, &TimePeriod::Hour);
+        assert_eq!(formatted, "2025-01-15 14:00");
+        assert_eq!(period_start.hour(), 14);
+        assert_eq!(period_start.minute(), 0);
+    }
 
     #[test]
     fn test_format_period_day() {

@@ -94,7 +94,7 @@ fn format_number(n: u128) -> String {
     let len = s.len();
 
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -286,7 +286,7 @@ pub async fn execute(
     // Sort results
     match sort_by {
         BatchStatusSortBy::BatchId => statuses.sort_by(|a, b| a.batch_id.cmp(&b.batch_id)),
-        BatchStatusSortBy::Depth => statuses.sort_by(|a, b| b.depth.cmp(&a.depth)), // Descending order (highest depth first)
+        BatchStatusSortBy::Depth => statuses.sort_by_key(|s| std::cmp::Reverse(s.depth)), // Descending order (highest depth first)
         BatchStatusSortBy::Ttl => {
             statuses.sort_by(|a, b| {
                 // Parse ttl_blocks strings (removing commas) for numeric comparison
@@ -296,7 +296,7 @@ pub async fn execute(
             })
         }
         BatchStatusSortBy::Expiry => {
-            statuses.sort_by(|a, b| a.expiry_timestamp.cmp(&b.expiry_timestamp))
+            statuses.sort_by_key(|s| s.expiry_timestamp)
         }
         BatchStatusSortBy::Size => {
             statuses.sort_by(|a, b| {
