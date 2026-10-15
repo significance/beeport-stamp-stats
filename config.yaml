@@ -88,10 +88,12 @@ contracts:
     deployment_block: 31306385
     active: true
 
+  # 0xCfC2FfF779E572990304bc5Da857087a3e576dd0 (previously here) has no code on Gnosis.
+  # 0x5EBf... is the live registry; all StampsRegistry events in the database come from it.
   - name: "StampsRegistry"
     contract_type: "StampsRegistry"
-    address: "0xCfC2FfF779E572990304bc5Da857087a3e576dd0"
-    deployment_block: 28165570
+    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+    deployment_block: 42390510
     active: true
 
 storage_incentives_contracts:

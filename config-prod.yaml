@@ -1,0 +1,95 @@
+# Run config for the production database (the one holding the full price history).
+# Same as config.yaml minus the localhost:8545 endpoint (no local node running).
+
+database:
+  path: "postgresql://localhost/beeport_tx_prod"
+
+rpc:
+  endpoints:
+    - url: "https://rpc.gnosischain.com"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    - url: "https://gnosis-rpc.publicnode.com"
+      rate_limit: adaptive
+      priority: 1
+      weight: 1
+
+    - url: "https://xdai.fairdatasociety.org"
+      rate_limit: adaptive
+      priority: 2
+      weight: 1
+
+    # Tested 2026-10-15: serves 2000-block getLogs without a key. drpc/ankr/1rpc/blockpi/
+    # onfinality/blastapi all refused (key required, 50-block cap, or shut down).
+    - url: "https://rpc.gnosis.gateway.fm"
+      rate_limit: adaptive
+      priority: 2
+      weight: 1
+
+rate_limiting:
+  max_concurrent_requests: 10
+  health_check_interval_seconds: 60
+  stats_log_interval_seconds: 30
+
+  adaptive:
+    start_rps: 2.0
+    max_rps: 50.0
+    min_rps: 0.5
+    ramp_up_factor: 1.1
+    back_off_factor: 0.5
+    ramp_up_threshold: 50
+
+  aggressive:
+    start_rps: 10.0
+    min_rps: 0.5
+    back_off_factor: 0.3
+
+  recovery:
+    cool_down_period_secs: 60
+    min_healthy_rate: 5.0
+    gradual_recovery_factor: 1.05
+    recovery_check_interval_secs: 30
+
+blockchain:
+  chunk_size: 2000
+  expected_block_time_seconds: 5
+  block_timestamp_cache_size: 10000
+
+retry:
+  max_retries: 5
+  initial_delay_ms: 100
+  backoff_multiplier: 4.0
+  extended_retry_wait_seconds: 300
+
+contracts:
+  - name: "PostageStamp"
+    contract_type: "PostageStamp"
+    address: "0x45a1502382541cd610cc9068e88727426b696293"
+    deployment_block: 31306385
+    active: true
+
+  # 0xCfC2FfF779E572990304bc5Da857087a3e576dd0 (previously here) has no code on Gnosis.
+  # 0x5EBf... is the live registry; all StampsRegistry events in the database come from it.
+  - name: "StampsRegistry"
+    contract_type: "StampsRegistry"
+    address: "0x5EBfBeFB1E88391eFb022d5d33302f50a46bF4f3"
+    deployment_block: 42390510
+    active: true
+
+storage_incentives_contracts:
+  - name: "PriceOracle"
+    contract_type: "PriceOracle"
+    address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b"
+    deployment_block: 37339168
+
+  - name: "StakeRegistry"
+    contract_type: "StakeRegistry"
+    address: "0xda2a16EE889E7f04980A8d597b48c8D51B9518F4"
+    deployment_block: 40430237
+
+  - name: "Redistribution"
+    contract_type: "Redistribution"
+    address: "0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d"
+    deployment_block: 41105199
