@@ -1,20 +1,94 @@
 # Beeport TX Stats - Project Plan
 
-**Last Updated:** 2026-01-25 20:41 UTC (comprehensive testing completed)
+**Last Updated:** 2026-10-15 UTC
+**See also:** `state.md` for a verified snapshot of git, build, config, and database state. Read it first in a new session.
 
 ---
 
 ## 📍 Current Status
 
 **Branch:** `feat/improve-retrieval-efficiency-with-bandwidth`
-**Goal:** Improve retrieval efficiency for postage batch data collection
-**Database:** `beeport_bandwidth_testing` (PostgreSQL, for testing)
+**Goal:** Fix expiry-analytics command to show stamp expiry predictions
+**Database:** `beeport_bandwidth` (PostgreSQL)
 
-**Project State:** ✅ Comprehensive Testing Complete
+**Build Status:** ✅ All systems go
+- 87 unit tests passing (added Hour period test)
+- Zero clippy warnings
+- Release binary built
 
-**Testing Session (2026-01-25 20:41 UTC):**
+**Project State:** ✅ Phases 1 & 2 Complete - Expiry Analytics Fixed
+
+**2026-10-12 11:30 UTC — session resumed after ~8 months (Claude transcripts for this project were deleted; repo notes are the only history):**
+- Working tree: Phase 1 + 2 expiry-analytics changes (`src/cli.rs`, `src/commands/expiry_analytics.rs`, this file) are still UNCOMMITTED on `feat/improve-retrieval-efficiency-with-bandwidth`, 25 commits ahead of `main`, nothing behind.
+- `cargo test` / `cargo clippy` could not run: "No space left on device". Root volume ~3 GB free; `target/` here is 1.6 GB, `~/Library/Caches` 20 GB, duplicate `.sql` dumps ~2.5 GB across beeport-tx-stats and -multi2. Nothing deleted — user's call.
+- Postgres is up with `beeport3m`, `beeport5`, `beeport6`, `beeport_bandwidth`, `beeport_bandwidth_testing`, `beeport_tx_prod`. `config.yaml` points at `beeport3m`; bandwidth work uses `bandwidth-test-config.yaml` → `beeport_bandwidth`.
+- Next: free disk, rebuild, confirm 87 tests + clippy clean, then commit Phase 1/2 and decide on Phase 3 (parallel balance refresh) and the ARCHITECTURE_REVIEW.md cleanup list.
+
+**2026-10-12 12:05 UTC — build green again:**
+- User freed disk (35 GB free). The ENOSPC failure had corrupted `target/debug/incremental` ("cached cgu … should have an object file"); fix was `rm -rf target/debug/incremental`, then rebuild. Debug note: an out-of-disk mid-compile leaves a broken incremental cache; clear that directory before anything else.
+- Toolchain is now rustc 1.96.0-nightly (2026-03-15); newer clippy lints flagged 11 pre-existing sites. Fixed: 4× `% 3 == 0` → `is_multiple_of(3)` (thousands-separator helpers in cache.rs, cli.rs, batch_status.rs, expiry_analytics.rs), 6× `sort_by` → `sort_by_key` (cli.rs, batch_status.rs, expiry_analytics.rs), 1× `is_some()`+`unwrap()` → `if let` (cli.rs factory filter). Behaviour unchanged.
+- `cargo test`: 87 passed. `cargo clippy -- -D warnings`: clean. `cargo build --release`: OK.
+- Known, not fixed: `cargo clippy --all-targets` flags "items after a test module" in `src/contracts/impls.rs:185` (pre-existing; move the `mod tests` block to the end of the file when touching that file).
+- All of the above plus the Phase 1/2 expiry-analytics changes remain UNCOMMITTED, awaiting the user's go-ahead.
+
+**2026-10-12 12:30 UTC — env + data inventory (verified against Postgres):**
+- There is NO `.env` file and never was one in git. Config is YAML (`config.yaml` → `beeport3m`; `bandwidth-config.yaml` → `beeport_bandwidth`; `bandwidth-test-config.yaml` → `beeport_bandwidth_testing`), overridable with `BEEPORT__SECTION__KEY` env vars. `rpc-api-keys.txt` contains no keys, only a pasted Claude message listing providers. No secrets anywhere in the tree.
+- Real table names are `events` and `storage_incentives_events` (this file's older sections say `stamp_events`; that is wrong).
+- Databases (all data ends late Jan 2026, ~4.4M blocks behind chain head):
+  - `beeport_tx_prod` 861 MB — the ONLY db with price history: 1.23M storage-incentives events incl. 80,396 PriceUpdate, blocks 31,307,171–44,267,041 (2023-12-06 → 2026-01-21); 184k stamp events.
+  - `beeport3m` 166 MB — freshest stamp events (→ block 44,412,633, 2026-01-29), 0 storage-incentives events. This is what `config.yaml` points at.
+  - `beeport_bandwidth` 165 MB — stamp events → 2026-01-25, 713 payment_channel_deployments, 0 si events.
+  - `beeport_bandwidth_testing` 1 GB — payment channel data only (35k deployments, 6k events) + 2.25M-row rpc_cache; no stamp/si events.
+  - `beeport5` 12 MB, `beeport6` 8 MB — early stubs, ignorable.
+  - `batch_balances` is empty in every db (root cause of the expiry-analytics bug).
+- Git (checked 2026-10-15): remote `origin` = github.com/significance/beeport-stamp-stats. Current branch is in sync with origin (0 ahead/0 behind) apart from the uncommitted work above; it has NO pull request. `main` is in sync but last moved 2026-01-10. Open PRs: #4 investigate-addresses, #5 address-tracking-phase2, #6 improve-retrieval-efficiency (that branch has diverged: 8 local commits unpushed, 3 remote commits unpulled). Everything in PRs #4–#6 is already contained in this branch's history.
+- RPC keys: there are none. Every config, doc, and the shell environment use only free public Gnosis endpoints; the multi-RPC scheduler exists precisely because there were no keys.
+- Loose files (untracked, gitignored): `price-updates.csv` 16 MB, `events.csv`, `balances.csv`, `stamp-cache.db`, `beeport_test_2.db` (all 24–25 Jan 2026); 2.5 GB of `.sql` dumps duplicated in `../beeport-tx-stats`.
+
+---
+
+## 🚧 Current Task: Fix Expiry Analytics Command
+
+**Problem:** The `expiry-analytics` command shows nothing because:
+1. The `batch_balances` cache table is empty (0 rows)
+2. Without cached balances and without `--refresh`, the code sets balance to "0"
+3. All batches are skipped as "expired" → no output
+4. No `Hour` period option (only Day/Week/Month)
+
+**Root Cause Analysis:**
+- `batches` table: 17,551 rows (has `normalised_balance` from creation/last event)
+- `batch_balances` table: 0 rows (stores current on-chain balance)
+- Code logic: If no cached balance AND not refresh mode → balance = "0" → skip
+
+**Solution Plan:**
+
+### Phase 1: Add fallback to stored balance (quick fix)
+- [x] When no cached balance exists, use `normalised_balance` from batches table
+- [x] Add warning that this may not reflect current on-chain state
+- [x] Batches created long ago will show inaccurate expiry (balance depleted)
+
+### Phase 2: Add Hour time period
+- [x] Add `Hour` variant to `TimePeriod` enum in `src/cli.rs`
+- [x] Add hour formatting in `ExpiryPeriod::format_period()` in `src/commands/expiry_analytics.rs`
+- [x] Add unit test for Hour period formatting
+
+### Phase 3: Efficient balance refresh (optional, for accurate data)
+- [ ] Consider batch RPC calls (multicall) for fetching many balances
+- [ ] Use parallel fetching across multiple RPCs
+- [ ] Or: Add a new command `refresh-balances` that efficiently updates the cache
+
+**Files to modify:**
+- `src/cli.rs` - Add `Hour` to `TimePeriod` enum
+- `src/commands/expiry_analytics.rs` - Add fallback logic + hour formatting
+
+---
+
+**Last Verified (2026-02-12):**
 - ✅ 86 unit tests passing
 - ✅ Zero clippy warnings
+- ✅ Release binary built
+
+**Previous Testing Session (2026-01-25 20:41 UTC):**
 - ✅ Fixed 3 failing tests (config defaults, constant values, fractional rate test)
 - ✅ Fixed `u64::MAX` overflow bug in SQL queries (caused empty results)
 - ✅ Fixed duplicate `#[allow(dead_code)]` attributes in rate_limiter.rs
