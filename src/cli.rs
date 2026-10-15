@@ -654,6 +654,7 @@ impl Cli {
                     cache,
                     client,
                     &registry,
+                    &si_registry,
                     &config,
                     *from_block,
                     *to_block,
@@ -1217,6 +1218,7 @@ impl Cli {
         cache: Cache,
         client: BlockchainClient,
         registry: &ContractRegistry,
+        si_registry: &StorageIncentivesContractRegistry,
         config: &AppConfig,
         from_block: Option<u64>,
         to_block: Option<u64>,
@@ -1236,17 +1238,14 @@ impl Cli {
             })
             .unwrap_or(DEFAULT_START_BLOCK);
 
-        let to = to_block.unwrap_or(i64::MAX as u64);
+        // Resolve "latest" up front: a sentinel like u64::MAX cannot be bound to an
+        // i64 SQL column, and anything else would be walked as a literal block range.
+        let to = match to_block {
+            Some(b) => b,
+            None => client.get_current_block().await?,
+        };
 
-        tracing::info!(
-            "Syncing from block {} to {}",
-            from,
-            if to == u64::MAX {
-                "latest".to_string()
-            } else {
-                to.to_string()
-            }
-        );
+        tracing::info!("Syncing from block {from} to {to}");
 
         // Fetch events with incremental storage
         let cache_clone = cache.clone();
@@ -1283,24 +1282,63 @@ impl Cli {
             )
             .await?;
 
-        if events.is_empty() {
-            println!("✅ Database is already up to date!");
-            return Ok(());
-        }
-
-        tracing::info!("Found {} new events", events.len());
+        tracing::info!("Found {} new postage stamp events", events.len());
 
         // Count batches for display (already stored incrementally)
         let batch_count = events.iter().filter(|e| matches!(e.event_type, crate::events::EventType::BatchCreated)).count();
+
+        // Storage incentives contracts resume from their own table's height: the two
+        // passes are independent and historically only `fetch` ran this one.
+        let si_from = match from_block {
+            Some(b) => b,
+            None => cache
+                .get_last_storage_incentives_block()
+                .await?
+                .map(|b| b + 1)
+                .unwrap_or(from),
+        };
+        tracing::info!("Syncing storage incentives contracts from block {si_from} to {to}");
+
+        let cache_clone = cache.clone();
+        let si_events = client
+            .fetch_storage_incentives_events(
+                si_from,
+                to,
+                &cache,
+                si_registry,
+                &config.blockchain,
+                &config.retry,
+                refresh,
+                |chunk_events: Vec<crate::events::StorageIncentivesEvent>| {
+                    let cache = cache_clone.clone();
+                    async move {
+                        cache.store_storage_incentives_events(&chunk_events).await?;
+                        tracing::debug!(
+                            "Stored {} storage incentives events from chunk",
+                            chunk_events.len()
+                        );
+                        Ok(())
+                    }
+                },
+            )
+            .await?;
+
+        tracing::info!("Found {} new storage incentives events", si_events.len());
+
+        if events.is_empty() && si_events.is_empty() {
+            println!("✅ Database is already up to date!");
+            return Ok(());
+        }
 
         // Cache the current price
         let current_price = client.get_current_price(registry).await?;
         cache.cache_price(current_price).await?;
 
         println!(
-            "✅ Synced {} events and {} batches to database",
+            "✅ Synced {} postage stamp events ({} batches) and {} storage incentives events to database",
             events.len(),
-            batch_count
+            batch_count,
+            si_events.len()
         );
         println!("💰 Cached current price: {current_price} PLUR/chunk/block");
 
@@ -1474,17 +1512,16 @@ impl Cli {
 
             // Determine block range
             let from = from_block.unwrap_or(factory_config.deployment_block);
-            let to = to_block.unwrap_or(i64::MAX as u64);
+            let to = match to_block {
+                Some(b) => b,
+                None => client.get_current_block().await?,
+            };
 
             tracing::info!(
                 "Scanning factory '{}' from block {} to {}",
                 factory_config.name,
                 from,
-                if to == u64::MAX {
-                    "latest".to_string()
-                } else {
-                    to.to_string()
-                }
+                to
             );
 
             // Fetch deployment events with incremental storage
@@ -1622,6 +1659,9 @@ impl Cli {
             num_batches
         );
 
+        // Resolve the chain head once for every chequebook in this run
+        let head_block = client.get_current_block().await?;
+
         // Shared config for parallel tasks
         let blockchain_config = Arc::new(config.blockchain.clone());
         let retry_config = Arc::new(config.retry.clone());
@@ -1658,17 +1698,13 @@ impl Cli {
                         );
 
                         let from = from_block.unwrap_or(deployment.deployed_at_block);
-                        let to = to_block.unwrap_or(i64::MAX as u64);
+                        let to = to_block.unwrap_or(head_block);
 
                         tracing::debug!(
                             "Syncing chequebook '{}' from block {} to {}",
                             deployment.chequebook_address,
                             from,
-                            if to == u64::MAX {
-                                "latest".to_string()
-                            } else {
-                                to.to_string()
-                            }
+                            to
                         );
 
                         // Fetch events from this chequebook with incremental storage

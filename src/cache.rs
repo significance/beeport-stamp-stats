@@ -480,6 +480,19 @@ impl Cache {
         Ok(max_block.map(|b| b as u64))
     }
 
+    /// Get the highest block number stored in storage_incentives_events.
+    ///
+    /// Kept separate from `get_last_block` because the two tables are filled by
+    /// different passes and can be at different heights.
+    pub async fn get_last_storage_incentives_block(&self) -> Result<Option<u64>> {
+        let sql = "SELECT MAX(block_number) as max_block FROM storage_incentives_events";
+        let max_block: Option<i64> = match &self.pool {
+            DatabasePool::Sqlite(pool) => sqlx::query(sql).fetch_one(pool).await?.get("max_block"),
+            DatabasePool::Postgres(pool) => sqlx::query(sql).fetch_one(pool).await?.get("max_block"),
+        };
+        Ok(max_block.map(|b| b as u64))
+    }
+
     /// Retrieve events from the last N months
     pub async fn get_events(&self, months: u32) -> Result<Vec<StampEvent>> {
         let cutoff = if months == 0 {
