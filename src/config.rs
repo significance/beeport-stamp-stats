@@ -41,6 +41,14 @@ pub struct AppConfig {
     /// Contract configurations
     pub contracts: Vec<ContractConfig>,
 
+    /// Storage-incentives contracts (PriceOracle, StakeRegistry, Redistribution).
+    ///
+    /// These may be listed here or in `contracts`; both are read. The key was
+    /// introduced in config.yaml on 2026-01-25 without code support, which left the
+    /// storage-incentives registry empty and the price history frozen.
+    #[serde(default)]
+    pub storage_incentives_contracts: Vec<ContractConfig>,
+
     /// Payment channel factory configurations (optional)
     #[serde(default)]
     pub payment_channel_factories: Vec<PaymentChannelFactoryConfig>,
@@ -513,6 +521,7 @@ impl Default for AppConfig {
                 chunk_size: 10000,
                 block_time_seconds: 5.0,
             },
+            storage_incentives_contracts: vec![],
             payment_channel_factories: vec![
                 // Sepolia testnet factory
                 PaymentChannelFactoryConfig {
@@ -595,6 +604,13 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Every configured contract, from both `contracts` and `storage_incentives_contracts`.
+    pub fn all_contracts(&self) -> impl Iterator<Item = &ContractConfig> {
+        self.contracts
+            .iter()
+            .chain(self.storage_incentives_contracts.iter())
+    }
+
     /// Load configuration with default search paths
     ///
     /// Searches for config files in this order:
@@ -698,7 +714,7 @@ impl AppConfig {
             return Err("At least one contract must be configured".to_string());
         }
 
-        for contract in &self.contracts {
+        for contract in self.all_contracts() {
             // Validate contract name
             if contract.name.is_empty() {
                 return Err("Contract name cannot be empty".to_string());
@@ -818,6 +834,29 @@ mod tests {
     fn test_config_validation_success() {
         let config = AppConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_storage_incentives_contracts_key_is_read() {
+        // The separate `storage_incentives_contracts:` key must contribute to the
+        // contract set and be validated like the rest.
+        let mut config = AppConfig::default();
+        let base = config.contracts.len();
+        config.storage_incentives_contracts.push(ContractConfig {
+            name: "PriceOracle-extra".to_string(),
+            contract_type: "PriceOracle".to_string(),
+            address: "0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b".to_string(),
+            deployment_block: 37339168,
+            version: None,
+            active: true,
+            end_block: None,
+            paused_at: None,
+        });
+        assert_eq!(config.all_contracts().count(), base + 1);
+        assert!(config.validate().is_ok());
+
+        config.storage_incentives_contracts[0].contract_type = "Nonsense".to_string();
+        assert!(config.validate().is_err());
     }
 
     #[test]

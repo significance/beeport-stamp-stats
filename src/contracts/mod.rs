@@ -572,7 +572,7 @@ impl StorageIncentivesContractRegistry {
     pub fn from_config(config: &AppConfig) -> Result<Self> {
         let mut registry = Self::new();
 
-        for contract_config in &config.contracts {
+        for contract_config in config.all_contracts() {
             let contract: Option<Box<dyn StorageIncentivesContract>> =
                 match contract_config.contract_type.as_str() {
                     "PriceOracle" => Some(Box::new(impls::PriceOracleContract::new(
