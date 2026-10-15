@@ -39,6 +39,14 @@ and a SQLite file `./stamp-cache.db`.
 | Redistribution | `0x5069cdfB3D9E56d23B1cAeE83CE6109A7E4fd62d` | 41,105,199 | Committed, Revealed, WinnerSelected, TruthSelected, CurrentRevealAnchor, CountCommits, CountReveals, ChunkCount, PriceAdjustmentSkipped, WithdrawFailed, transformedChunkAddressFromInclusionProof |
 | SimpleSwapFactory (optional) | `0xc2d5a532cf69aa9a1378737d8ccdef884b6e7420` | 20,000,000 | chequebook deployments, then per-chequebook cheque events |
 
+The storage-incentives contracts may be listed under `contracts:` or under a separate
+`storage_incentives_contracts:` key; both are read. (Until 2026-10-15 only `contracts:` was,
+so a config using the separate key silently fetched none of them.)
+
+The database also holds events from earlier, now-retired deployments (several Redistribution
+and StakeRegistry versions, an older PriceOracle and PostageStamp) fetched before January 2026
+under a longer contract list. They are not in the current configs and nothing fetches them now.
+
 A batch created through StampsRegistry emits `BatchCreated` on both StampsRegistry and
 PostageStamp in the same transaction. Count PostageStamp events for totals; use StampsRegistry
 events to see which batches came through the UI and who paid.

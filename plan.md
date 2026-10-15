@@ -66,6 +66,19 @@
 - 16:04 started step 1 of the catch-up: `fetch --from-block 44264608 --to-block 45408557`
   (StampsRegistry backfill + SI for that range). Step 2 after it finishes: plain `sync`, which
   will carry SI from 45,408,558 to head. Then re-render the graph and backfill the 17 NULL senders.
+- 16:19 backfill fetch finished: StampsRegistry gap filled (274 rows now) but "0 storage
+  incentives events" in 30 s. ROOT CAUSE of the frozen price history: commit 460c9dd (2026-01-25)
+  rewrote `config.yaml` and moved PriceOracle/StakeRegistry/Redistribution under a new
+  `storage_incentives_contracts:` key that `AppConfig` never had, so serde dropped it and the
+  storage-incentives registry was empty from that day on. Fixed: `AppConfig` now has the field
+  (`#[serde(default)]`), `all_contracts()` chains both lists, the SI registry and validation use
+  it. Test added (89 pass). The same commit also dropped the historical contract versions
+  (Redistribution v0.8.6–v0.9.3, StakeRegistry v0.9.2, PostageStamp-Phase4, PriceOracle
+  0x86de…) from the config; their data is still in the database, nothing fetches them now,
+  which is fine because they are dead.
+- 16:25 `sync` running with the fixed binary: stamps topped up (+262), storage incentives from
+  44,267,042 → 48,772,053 (PriceOracle first). Several hours. Uncommitted: config.rs,
+  contracts/mod.rs, this file, state.md.
 - README rewritten to match this branch (commands, options, config schema, contract table, tables).
 - `plots/plot.py` verified working (headless render against `beeport_tx_prod`, ~15 s). It was the
   source of the ".env" memory: it reads `DB_NAME`/`DB_USER`/… via python-dotenv and defaulted to the

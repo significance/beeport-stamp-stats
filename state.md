@@ -27,10 +27,10 @@ Claude Code transcripts for this project were deleted. `plan.md`, `CLAUDE.md`,
 |---|---|
 | Remote | `git@github.com:significance/beeport-stamp-stats.git` |
 | Branch | `feat/improve-retrieval-efficiency-with-bandwidth` |
-| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-15 ~16:10 UTC, in sync |
+| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-15 ~16:35 UTC, in sync |
 | Working tree | clean, apart from 4 untracked junk files (`Reports Dashboard.xlsx`, `history.txt`, `note.txt`, `rpc-api-keys.txt`) deliberately not committed |
-| Latest commits | 2026-10-15, newest first: `docs: update plan and state`, `docs: rewrite README for this branch, document plots`, `config: fix StampsRegistry address, add config-prod.yaml`, `fix: retry 503/504 and dropped connections`, `fix: sync resolves chain head and now covers storage-incentives contracts`; earlier today `9aa95e2`, `7853dee` |
-| Ahead of `main` | 32 commits; `main` last moved 2026-01-10 |
+| Latest commits | 2026-10-15, newest first: `docs: record the config-key root cause`, `fix: read storage_incentives_contracts config key`, then `22c4adf` … `bf5be0c` (five commits ~16:10), `9aa95e2`, `7853dee` |
+| Ahead of `main` | 34 commits; `main` last moved 2026-01-10 |
 | PR for this branch | none |
 | Open PRs | #4 investigate-addresses, #5 address-tracking-phase2, #6 improve-retrieval-efficiency. All superseded by this branch. |
 | Diverged branch | `feat/improve-retrieval-efficiency`: 8 local unpushed, 3 remote unpulled. Inspect before merging anything. |
@@ -86,14 +86,14 @@ also duplicated in `../beeport-tx-stats`.
 ## In flight (2026-10-15)
 
 - Stamp events in `beeport_tx_prod` are CURRENT (48,768,672, finished 15:16 UTC).
-- Storage-incentives events are still at 44,267,041 because `sync` never fetched them (fixed in
-  the working tree, see plan.md). Catch-up is two steps:
-  1. RUNNING since 16:04: `fetch --from-block 44264608 --to-block 45408557` (StampsRegistry
-     backfill + storage incentives for that range).
-  2. Then: `./target/release/beeport-stamp-stats --config config-prod.yaml sync` carries the
-     storage-incentives tables from 45,408,558 to head. Several hours.
+- Storage-incentives events were frozen at 44,267,041 since 2026-01-25 because the config key
+  `storage_incentives_contracts:` was never parsed (fixed in the working tree, see plan.md).
+- RUNNING since 16:25 UTC: `sync` carrying the storage-incentives tables from 44,267,042 to
+  48,772,053 (PriceOracle, then StakeRegistry, then Redistribution). Several hours. If it dies:
+  `./target/release/beeport-stamp-stats --config config-prod.yaml sync` resumes automatically.
 - Afterwards: backfill 17 NULL `from_address` rows in blocks 45,780,202–45,780,551, and
   re-render `plots/incentives_hero_dashboard.png`.
+- Everything is committed and pushed. 89 tests, clippy clean, release binary built from this tree.
 - Everything above is committed and pushed. Tests 88 pass, clippy clean, release binary built
   from this tree.
 
