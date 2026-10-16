@@ -20,6 +20,13 @@ stamp-cache.db
 *.swo
 *~
 
+# Sync logs written by `just sync-bg`
+/logs/
+
+# Generated interactive dashboard (~13 MB, rebuild with `just graph-html`)
+/plots/*.html
+/plots/__pycache__/
+
 # OS
 .DS_Store
 Thumbs.db

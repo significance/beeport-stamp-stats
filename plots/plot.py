@@ -12,15 +12,20 @@ plt.style.use('dark_background')
 
 load_dotenv()
 
-def fetch_and_plot_metrics(export_filename=None):
-    dbname = os.getenv("DB_NAME", "beeport_tx_prod")
-    user = os.getenv("DB_USER", "sig32")
-    password = os.getenv("DB_PASS", "")
-    host = os.getenv("DB_HOST", "localhost")
-    port = os.getenv("DB_PORT", "5432")
+def db_settings():
+    """Connection settings from the environment (optionally via .env)."""
+    return dict(
+        dbname=os.getenv("DB_NAME", "beeport_tx_prod"),
+        user=os.getenv("DB_USER", "sig32"),
+        password=os.getenv("DB_PASS", ""),
+        host=os.getenv("DB_HOST", "localhost"),
+        port=os.getenv("DB_PORT", "5432"),
+    )
 
-    # Series to plot (comment out any you don't want)
-    series = [
+
+def series_queries():
+    """(label, sql) pairs for every series on the dashboard. Shared with plot_html.py."""
+    return [
         ("Reveals", """
             SELECT block_number, reveal_count FROM storage_incentives_events
             WHERE event_type = 'CountReveals' AND block_number IN (
@@ -75,38 +80,46 @@ def fetch_and_plot_metrics(export_filename=None):
         """),
     ]
 
-    queries = dict(series)
 
+def load_dataframes(settings=None):
+    """Run every series query and return {label: DataFrame indexed by block_number}.
+
+    The derived 'Reward per Node' series (10-round rolling pot / commits) replaces the raw
+    query result. Returns an empty dict if the database has no data.
+    """
+    settings = settings or db_settings()
+    conn = psycopg2.connect(**settings)
+    dataframes = {}
     try:
-        conn = psycopg2.connect(dbname=dbname, user=user, password=password, host=host, port=port)
-
-        # EXTRACT & TRANSFORM: Load raw data from database
-        dataframes = {}
-        for label, sql in queries.items():
+        for label, sql in series_queries():
             df = pd.read_sql(sql, conn)
             if not df.empty:
-                # Multi-column queries handled in LOAD phase
                 if label == "Reward per Node (Raw)":
                     dataframes[label] = df
                 else:
                     dataframes[label] = df.set_index('block_number').sort_index()
+    finally:
         conn.close()
 
+    if "Reward per Node (Raw)" in dataframes:
+        raw_df = dataframes.pop("Reward per Node (Raw)")
+        window = 10
+        raw_df['pot_sum'] = raw_df['pot_amount'].rolling(window=window, min_periods=1).sum()
+        raw_df['commit_sum'] = raw_df['commit_count'].rolling(window=window, min_periods=1).sum()
+        raw_df['reward_per_node'] = raw_df['pot_sum'] / raw_df['commit_sum'].replace(0, np.nan)
+        dataframes['Reward per Node'] = raw_df.set_index('block_number')[['reward_per_node']].dropna()
+
+    return dataframes
+
+
+def fetch_and_plot_metrics(export_filename=None):
+    dbname = db_settings()["dbname"]
+
+    try:
+        dataframes = load_dataframes()
         if not dataframes:
             print("No data found.")
             return
-
-        # LOAD: Process and derive metrics
-        if "Reward per Node (Raw)" in dataframes:
-            raw_df = dataframes.pop("Reward per Node (Raw)")
-
-            # 10-round moving average: sum(pot_withdrawn) / sum(commits)
-            window = 10
-            raw_df['pot_sum'] = raw_df['pot_amount'].rolling(window=window, min_periods=1).sum()
-            raw_df['commit_sum'] = raw_df['commit_count'].rolling(window=window, min_periods=1).sum()
-            raw_df['reward_per_node'] = raw_df['pot_sum'] / raw_df['commit_sum'].replace(0, np.nan)
-
-            dataframes['Reward per Node'] = raw_df.set_index('block_number')[['reward_per_node']].dropna()
 
         all_indices = pd.concat([df.index.to_series() for df in dataframes.values()])
         min_block, max_block = int(all_indices.min()), int(all_indices.max())
