@@ -22,8 +22,9 @@ just            # list recipes
 just status     # per-contract highest block vs chain head, cached price, is a sync running
 just sync-bg    # catch up to chain head in the background; prints the log path and a tail command
 just tail       # follow the newest sync log
-just graph      # render plots/incentives_hero_dashboard.png and open it
-just graph-html # build the single-file interactive HTML dashboard
+just graph-all  # render plots/incentives_hero_dashboard.png (full history) and open it; `just graph` is an alias
+just graph-3-month   # last 90 days → plots/incentives_hero_dashboard_3m.png; also graph-1-month, graph-1-week, graph-1-day
+just graph-html # build the single-file interactive HTML dashboard (add days=90 for a window)
 just graph-dev  # build it and serve it on http://localhost:8787 (Node http-server)
 just test       # cargo test + clippy
 just fill Redistribution 45140587 47968999   # one contract over an explicit range
@@ -235,18 +236,34 @@ SELECT max(block_number) FROM events;
 
 ## Plotting
 
-The storage-incentives dashboard plots price, commits, reveals, chunk counts, stake freezes,
-pot withdrawals and reward per node against block number, straight from the PostgreSQL
-database. It comes in two forms built from the same queries:
+The storage-incentives dashboard reads straight from the PostgreSQL database and plots the
+following against block number, each series on its own y-axis and with its own marker shape:
+
+| Series | Marker | What it is |
+|---|---|---|
+| Price | thick orange line | Storage price in PLUR per chunk per block, one `PriceUpdate` per round from the PriceOracle. It rises when fewer nodes than the target reveal in a round and falls when more do. |
+| Commits | ■ square | Nodes that committed in each round of the redistribution game (`CountCommits`), for rounds that produced a winner. |
+| Reveals | ● circle | Nodes that then revealed in that round (`CountReveals`). Reveals below commits mean nodes dropped out mid-round. |
+| Chunks | ▼ triangle down | `ChunkCount`: the postage contract's `validChunkCount()` at claim time, i.e. the total number of paid-for chunks across all live batches. A measure of how much storage is currently bought. |
+| Depth | ⬣ hexagon | Storage depth of the round's agreed truth (`TruthSelected.truth_depth`): how finely the network is split into neighbourhoods. 10 until Nov 2025, 9 since, some 10s back from Jun 2026. |
+| Freeze Time | ▲ triangle up | Duration in blocks of each `StakeFrozen` penalty. |
+| Frozen Events Count | ✕ cross | Number of `StakeFrozen` events between consecutive winners, a per-round penalty count. |
+| Pot Withdrawn | ◆ diamond, log scale | `PotWithdrawn.pot_total_amount`: PLUR paid out of the postage pot to each round's winner. |
+| Reward per Node | + white plus | Ten-round rolling `sum(pot withdrawn) / sum(commits)`: what a participating node earned per round, smoothed. |
+
+The dashboard comes in two forms built from the same queries:
 
 | Output | Script | Recipe | Notes |
 |---|---|---|---|
-| `plots/incentives_hero_dashboard.png` | `plots/plot.py` (matplotlib) | `just graph` | 300 dpi, committed to the repo, re-render after each sync |
-| `plots/incentives_hero_dashboard.html` | `plots/plot_html.py` (plotly) | `just graph-html`, `just graph-dev` | single self-contained file, zoom/pan/hover, ~13 MB, gitignored |
+| `plots/incentives_hero_dashboard.png` | `plots/plot.py` (matplotlib) | `just graph-all` (alias `just graph`) | 300 dpi, full history, committed to the repo, re-render after each sync |
+| `plots/incentives_hero_dashboard_{3m,1m,1w,1d}.png` | `plots/plot.py` | `just graph-3-month`, `graph-1-month`, `graph-1-week`, `graph-1-day` | same, windowed to 90 / 30 / 7 / 1 days; gitignored |
+| `plots/incentives_hero_dashboard.html` | `plots/plot_html.py` (plotly) | `just graph-html`, `just graph-dev` | single self-contained file, zoom/pan/hover, ~13 MB for full history, gitignored |
 
 `just graph-dev` builds the HTML and serves `plots/` on `http://localhost:8787` with Node's
 `http-server`, opening the browser; `just port=9000 graph-dev` changes the port.
-`just graph-interactive` opens the matplotlib window instead.
+`just graph-interactive` opens the matplotlib window instead. Every graph recipe accepts a
+`days` window, e.g. `just days=30 graph-dev`; the scripts read it as `SINCE_DAYS` and look up
+the cutoff block from event timestamps.
 
 Setup and the full series list are in [`plots/README.md`](./plots/README.md); the short version:
 

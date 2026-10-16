@@ -4,14 +4,20 @@
 eight series on stacked y-axes, dark theme. It reads straight from the PostgreSQL database that
 `beeport-stamp-stats` fills; it does not go to the chain.
 
-| Series | Source |
-|---|---|
-| Reveals, Commits, Chunks | `CountReveals` / `CountCommits` / `ChunkCount` events, only for rounds that produced a `WinnerSelected` |
-| Price (neon line, spline-smoothed) | `PriceUpdate` events from the PriceOracle |
-| Freeze Time | `StakeFrozen.freeze_time` |
-| Frozen Events Count | number of `StakeFrozen` events between consecutive `WinnerSelected` events |
-| Pot Withdrawn (log scale) | `PotWithdrawn.pot_total_amount` from the `events` table |
-| Reward per Node | 10-round rolling `sum(pot withdrawn) / sum(commits)` |
+| Series | Marker | Source |
+|---|---|---|
+| Reveals | ● circle | `CountReveals` events, only for rounds that produced a `WinnerSelected` |
+| Commits | ■ square | `CountCommits`, same rounds |
+| Chunks | ▼ triangle down | `ChunkCount` (= `PostageStamp.validChunkCount()` at claim), same rounds |
+| Price | neon line, spline-smoothed | `PriceUpdate` events from the PriceOracle |
+| Freeze Time | ▲ triangle up | `StakeFrozen.freeze_time` |
+| Frozen Events Count | ✕ cross | number of `StakeFrozen` events between consecutive `WinnerSelected` events |
+| Pot Withdrawn (log scale) | ◆ diamond | `PotWithdrawn.pot_total_amount` from the `events` table |
+| Reward per Node | + plus, white | 10-round rolling `sum(pot withdrawn) / sum(commits)` |
+| Depth | ⬣ hexagon | `TruthSelected.truth_depth`: the storage depth of the round's agreed truth |
+
+Markers are defined once in `plot.py` (`MARKERS`) and shared with the HTML renderer, so the two
+outputs match. The subtitle under the title names the database and any time window.
 
 Last verified working: 2026-10-15 (Python 3.13, matplotlib 3.10, pandas 2.3, against `beeport_tx_prod`).
 
@@ -37,6 +43,15 @@ Point it at another database for a one-off:
 
 ```bash
 DB_NAME=beeport3m python3 plot.py
+```
+
+Restrict to a recent window with `SINCE_DAYS` (the cutoff block is looked up from event
+timestamps; the title says so):
+
+```bash
+SINCE_DAYS=90 python3 plot.py          # or: just graph-3-month (writes incentives_hero_dashboard_3m.png)
+just graph-1-month                     # likewise graph-1-week, graph-1-day; graph-all is the full history
+just days=30 graph-dev                 # the HTML recipes take a free-form window
 ```
 
 ## Interactive HTML version

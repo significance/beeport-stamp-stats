@@ -27,10 +27,10 @@ Claude Code transcripts for this project were deleted. `plan.md`, `CLAUDE.md`,
 |---|---|
 | Remote | `git@github.com:significance/beeport-stamp-stats.git` |
 | Branch | `feat/improve-retrieval-efficiency-with-bandwidth` |
-| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-16 ~00:55 UTC, in sync |
+| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-16 ~02:00 UTC, in sync |
 | Working tree | clean, apart from 4 untracked junk files (`Reports Dashboard.xlsx`, `history.txt`, `note.txt`, `rpc-api-keys.txt`) deliberately not committed |
-| Latest commits | 2026-10-16: `docs: README covers justfile and both dashboards; plan and state`, `feat: interactive HTML dashboard and justfile`, `chore: re-render dashboard PNG from current data`; 2026-10-15: `04cdd67`, `fbafea5`, `cbdb475`, `69bdca3`, `22c4adf` … `bf5be0c`, `9aa95e2`, `7853dee` |
-| Ahead of `main` | 39 commits; `main` last moved 2026-01-10 |
+| Latest commits | 2026-10-16: `docs: plotting section with series table; plan and state`, `feat: depth series, per-series markers, windowed graph recipes`, `cdb2832`, `7b1efd5`, `d169eab`; 2026-10-15: `04cdd67`, `fbafea5`, `cbdb475`, `69bdca3`, `22c4adf` … `bf5be0c`, `9aa95e2`, `7853dee` |
+| Ahead of `main` | 41 commits; `main` last moved 2026-01-10 |
 | PR for this branch | none |
 | Open PRs | #4 investigate-addresses, #5 address-tracking-phase2, #6 improve-retrieval-efficiency. All superseded by this branch. |
 | Diverged branch | `feat/improve-retrieval-efficiency`: 8 local unpushed, 3 remote unpulled. Inspect before merging anything. |

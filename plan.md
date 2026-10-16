@@ -98,6 +98,18 @@
 - 19:35 the 17 txs with NULL `from_address` from the 503 outage were backfilled with a one-off
   script (`eth_getTransactionByHash` → `UPDATE events`). Zero NULL senders remain above 44.26M.
   Debug note: publicnode returns 403 to Python's default user-agent; send a curl-like one.
+- 2026-10-16 01:45 added "Depth" series (TruthSelected.truth_depth, hexagon) to both renderers;
+  palette extended to 9 colours (shared `CB_COLORS` in plot.py) so no two series share a colour.
+  README gained a "what is plotted" table; ChunkCount documented correctly as
+  `PostageStamp.validChunkCount()` at claim (total paid chunks), not a sample count.
+- 2026-10-16 01:30 one marker shape per series (shared `MARKERS` table in plot.py, used by both
+  renderers) so series are distinguishable without colour; subtitle (database · window) made
+  small and grey under the title in both outputs. Title stays "Storage Incentives Metrics".
+- 2026-10-16 01:15 windowed graphs: `just graph-all` (alias `graph`), `graph-3-month`,
+  `graph-1-month`, `graph-1-week`, `graph-1-day` → `incentives_hero_dashboard{,_3m,_1m,_1w,_1d}.png`
+  (windowed ones gitignored); `SINCE_DAYS` env / `days` just-variable honoured by both renderers.
+  Depth IS in the data (Revealed.depth, TruthSelected.truth_depth, WinnerSelected.winner_depth):
+  network went 10 → 9 in Nov 2025, some 10s back since Jun 2026. Not yet plotted.
 - 2026-10-16 00:40 interactive dashboard: `plots/plot_html.py` (plotly, single self-contained
   HTML, same series via refactored `plot.py` helpers `series_queries`/`load_dataframes`/
   `db_settings`); `just graph-html` builds it, `just graph-dev` builds and serves `plots/` with
