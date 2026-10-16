@@ -98,6 +98,23 @@
 - 19:35 the 17 txs with NULL `from_address` from the 503 outage were backfilled with a one-off
   script (`eth_getTransactionByHash` → `UPDATE events`). Zero NULL senders remain above 44.26M.
   Debug note: publicnode returns 403 to Python's default user-agent; send a curl-like one.
+- 2026-10-16 00:40 interactive dashboard: `plots/plot_html.py` (plotly, single self-contained
+  HTML, same series via refactored `plot.py` helpers `series_queries`/`load_dataframes`/
+  `db_settings`); `just graph-html` builds it, `just graph-dev` builds and serves `plots/` with
+  Node `http-server` on port 8787 (var `port`). HTML and `__pycache__` gitignored. PNG path
+  verified unchanged after the refactor.
+- 21:05 resumed the Redistribution gap fill with `just fill Redistribution 45140587 47968999`;
+  23:10 DONE, 0 errors, 4×50 req/s throughout. All three storage-incentives contracts are now
+  continuous from their January position to chain head. 23:15 final `just sync-bg` to head, then
+  `just graph` to refresh the committed PNG. The Frozen-Events outlier should be gone.
+- ~21:50 added `justfile` (build, test, sync, sync-bg, fill, stop, tail, status, graph,
+  graph-interactive, price); `logs/` gitignored; README quick start now leads with it.
+  The ~350 "Frozen Events Count" outlier at 47.97M on the graph is an artifact of the unfilled
+  Redistribution gap (349 StakeFrozen events between the last WinnerSelected at 45,140,586 and
+  the next at 47,969,153 counted as one round); it disappears when the fill completes.
+- ~21:35 PAUSED at user request. Redistribution gap fill at 45,140,586 / 47,968,999. Resume
+  command is in state.md. Graph rendered at 20:43 (price line current; commits/reveals still
+  missing 44.5M–48M until the gap fill completes).
 - README rewritten to match this branch (commands, options, config schema, contract table, tables).
 - `plots/plot.py` verified working (headless render against `beeport_tx_prod`, ~15 s). It was the
   source of the ".env" memory: it reads `DB_NAME`/`DB_USER`/… via python-dotenv and defaulted to the

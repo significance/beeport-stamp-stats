@@ -27,10 +27,10 @@ Claude Code transcripts for this project were deleted. `plan.md`, `CLAUDE.md`,
 |---|---|
 | Remote | `git@github.com:significance/beeport-stamp-stats.git` |
 | Branch | `feat/improve-retrieval-efficiency-with-bandwidth` |
-| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-15 ~19:45 UTC, in sync |
+| Upstream | `origin/feat/improve-retrieval-efficiency-with-bandwidth`, pushed 2026-10-16 ~00:55 UTC, in sync |
 | Working tree | clean, apart from 4 untracked junk files (`Reports Dashboard.xlsx`, `history.txt`, `note.txt`, `rpc-api-keys.txt`) deliberately not committed |
-| Latest commits | 2026-10-15, newest first: `docs: log the gap fill and sender backfill`, `feat: per-contract resume for storage incentives, working sync --contract`, `cbdb475`, `69bdca3`, `22c4adf` … `bf5be0c`, `9aa95e2`, `7853dee` |
-| Ahead of `main` | 36 commits; `main` last moved 2026-01-10 |
+| Latest commits | 2026-10-16: `docs: README covers justfile and both dashboards; plan and state`, `feat: interactive HTML dashboard and justfile`, `chore: re-render dashboard PNG from current data`; 2026-10-15: `04cdd67`, `fbafea5`, `cbdb475`, `69bdca3`, `22c4adf` … `bf5be0c`, `9aa95e2`, `7853dee` |
+| Ahead of `main` | 39 commits; `main` last moved 2026-01-10 |
 | PR for this branch | none |
 | Open PRs | #4 investigate-addresses, #5 address-tracking-phase2, #6 improve-retrieval-efficiency. All superseded by this branch. |
 | Diverged branch | `feat/improve-retrieval-efficiency`: 8 local unpushed, 3 remote unpulled. Inspect before merging anything. |
@@ -88,10 +88,13 @@ also duplicated in `../beeport-tx-stats`.
 - Stamp events in `beeport_tx_prod` are CURRENT (48,768,672, finished 15:16 UTC).
 - Storage-incentives events are at chain head for all three contracts (17:17 UTC), EXCEPT a hole
   for StakeRegistry and Redistribution between 44.25M and 47.97M left by a run that died mid-pass.
-- RUNNING since 19:21 UTC: gap fill, two chained commands:
-  `sync --contract StakeRegistry --from-block 44251993 --to-block 47968999` then
-  `sync --contract Redistribution --from-block 44264608 --to-block 47968999`.
-  If it dies, rerun the same two commands; `rpc_cache` skips finished chunks.
+- ALL GAPS FILLED 2026-10-15 23:10 UTC. Redistribution gap fill finished clean (419k rows for
+  44.25M–47.97M, 0 RPC errors). Verified: no WinnerSelected gap > 761 blocks between 44M and 48M.
+- 2026-10-16 00:15 UTC: final catch-up done (all contracts at head, price 183,942); PNG
+  re-rendered and committed. Nothing is running. Routine from here: `just sync-bg`, then
+  `just graph` and/or `just graph-dev`.
+- Everything is committed and pushed. 89 tests, clippy clean, release binary built from this tree.
+- Tooling: `justfile` added (status, sync, sync-bg, fill, stop, tail, graph, …); `logs/` gitignored.
 - DONE 19:35: the 20 `events` rows (17 txs) left without `from_address` by the 503 outage were
   backfilled via `eth_getTransactionByHash`; no NULL senders remain above block 44,264,607.
 - Afterwards: re-render `plots/incentives_hero_dashboard.png`.

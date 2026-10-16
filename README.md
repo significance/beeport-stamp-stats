@@ -14,6 +14,25 @@ verified state of git, build and databases see [`state.md`](./state.md); for the
 
 ## Quick start
 
+With [`just`](https://github.com/casey/just) installed (`brew install just`), the everyday
+commands are recipes in the `justfile`:
+
+```bash
+just            # list recipes
+just status     # per-contract highest block vs chain head, cached price, is a sync running
+just sync-bg    # catch up to chain head in the background; prints the log path and a tail command
+just tail       # follow the newest sync log
+just graph      # render plots/incentives_hero_dashboard.png and open it
+just graph-html # build the single-file interactive HTML dashboard
+just graph-dev  # build it and serve it on http://localhost:8787 (Node http-server)
+just test       # cargo test + clippy
+just fill Redistribution 45140587 47968999   # one contract over an explicit range
+just stop       # kill a running sync
+```
+
+Recipes default to `config-prod.yaml` and the `beeport_tx_prod` database; override with
+`just config=config.yaml db=beeport3m status`. Without `just`:
+
 ```bash
 cargo build --release
 B=./target/release/beeport-stamp-stats
@@ -216,13 +235,27 @@ SELECT max(block_number) FROM events;
 
 ## Plotting
 
-`plots/plot.py` renders the storage-incentives dashboard (price, commits, reveals, chunks,
-freezes, pot withdrawals, reward per node against block number) directly from the PostgreSQL
-database. See [`plots/README.md`](./plots/README.md) for setup; the short version:
+The storage-incentives dashboard plots price, commits, reveals, chunk counts, stake freezes,
+pot withdrawals and reward per node against block number, straight from the PostgreSQL
+database. It comes in two forms built from the same queries:
+
+| Output | Script | Recipe | Notes |
+|---|---|---|---|
+| `plots/incentives_hero_dashboard.png` | `plots/plot.py` (matplotlib) | `just graph` | 300 dpi, committed to the repo, re-render after each sync |
+| `plots/incentives_hero_dashboard.html` | `plots/plot_html.py` (plotly) | `just graph-html`, `just graph-dev` | single self-contained file, zoom/pan/hover, ~13 MB, gitignored |
+
+`just graph-dev` builds the HTML and serves `plots/` on `http://localhost:8787` with Node's
+`http-server`, opening the browser; `just port=9000 graph-dev` changes the port.
+`just graph-interactive` opens the matplotlib window instead.
+
+Setup and the full series list are in [`plots/README.md`](./plots/README.md); the short version:
 
 ```bash
-cd plots && pip install -r requirements.txt && python3 plot.py
+cd plots && pip install -r requirements.txt     # psycopg2, pandas, matplotlib, numpy, scipy, python-dotenv, plotly
 ```
+
+Connection settings come from `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_HOST`, `DB_PORT`
+(optionally via `plots/.env`, see `plots/.env.example`); the `just` recipes pass `db` through.
 
 ## TTL and price modelling
 
@@ -241,13 +274,25 @@ shortens the TTL more than a naive calculation suggests. Arithmetic is 128-bit.
 ## Development
 
 ```bash
-cargo test                       # 87 unit tests
-cargo clippy -- -D warnings      # must be clean
-cargo build --release
+just test                        # cargo test (89 unit tests) + cargo clippy -D warnings, both must be clean
+just build                       # cargo build --release
 ```
 
 Toolchain: Rust nightly, edition 2024. Key crates: alloy 0.8, sqlx 0.8 (sqlite + postgres),
 tokio 1.43, clap 4.5, config 0.14, tabled 0.17.
+
+Repository layout:
+
+```
+justfile                 task runner recipes (status, sync, fill, graph, …)
+config-prod.yaml         the config to use; config.yaml, bandwidth*-config.yaml, config.example.toml are the others
+src/                     the CLI (below)
+migrations/              SQLite schema; migrations_postgres/ the PostgreSQL schema
+plots/                   plot.py (PNG), plot_html.py (HTML), README, requirements.txt, .env.example
+docs/                    design notes, RPC endpoint list, older configs
+logs/                    sync logs from `just sync-bg` (gitignored)
+plan.md, state.md        running log and verified current state; CLAUDE.md architecture guide
+```
 
 ```
 src/
@@ -279,6 +324,8 @@ Adding a contract is config plus an ABI, parser and registry entry; the walkthro
 - `batch_balances` is only populated by `--refresh`, which is slow, so TTL figures for old
   batches are approximate until a refresh runs.
 - `rate_limiter.rs` (v1) still exists alongside v2 and should be deleted.
+- The HTML dashboard carries every data point (~700k) and is ~13 MB; it takes a few seconds to
+  load. Downsampling the dense Redistribution series would shrink it if that matters.
 
 ## License
 

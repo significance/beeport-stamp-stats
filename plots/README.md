@@ -39,6 +39,22 @@ Point it at another database for a one-off:
 DB_NAME=beeport3m python3 plot.py
 ```
 
+## Interactive HTML version
+
+`plot_html.py` draws the same series with plotly into one self-contained HTML file (plotly.js
+inlined, about 13 MB with the full history) that you can zoom, pan and hover:
+
+```bash
+python3 plot_html.py                    # writes incentives_hero_dashboard.html here
+just graph-html                         # same, from the project root
+just graph-dev                          # build it and serve plots/ on http://localhost:8787 (Node http-server), opens the browser
+just port=9000 graph-dev                # different port
+```
+
+The HTML is gitignored; rebuild it after a sync. `plot_html.py` imports `series_queries`,
+`load_dataframes` and `db_settings` from `plot.py`, so the two stay in step: add a series to
+`series_queries()` and both outputs pick it up.
+
 ## Notes
 
 - The PNG is 300 dpi, about 1.4 MB; the chart takes ~15 s to build.
