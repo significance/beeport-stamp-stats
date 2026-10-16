@@ -12,6 +12,31 @@ plt.style.use('dark_background')
 
 load_dotenv()
 
+TITLE = "Storage Incentives Metrics"
+
+# One marker shape per series so they can be told apart without relying on colour.
+# matplotlib code → plotly symbol
+MARKERS = {
+    "Reveals":             ("o", "circle"),
+    "Commits":             ("s", "square"),
+    "Freeze Time":         ("^", "triangle-up"),
+    "Chunks":              ("v", "triangle-down"),
+    "Frozen Events Count": ("X", "x"),
+    "Pot Withdrawn (log)": ("D", "diamond"),
+    "Reward per Node":     ("+", "cross-thin"),
+    "Depth":               ("h", "hexagon"),
+}
+
+# Colour-blind-safe palette, indexed by series order; Price and Reward per Node override it.
+CB_COLORS = ['#0072B2', '#D55E00', '#009E73', '#FFFFAA', '#F0E442', '#56B4E9', '#CC79A7', '#E69F00', '#999999']
+NEON_ORANGE = '#FF5F1F'
+
+
+def marker_for(label, backend="mpl"):
+    mpl, plotly = MARKERS.get(label, ("o", "circle"))
+    return mpl if backend == "mpl" else plotly
+
+
 def db_settings():
     """Connection settings from the environment (optionally via .env)."""
     return dict(
@@ -78,19 +103,43 @@ def series_queries():
                 AND pw.pot_total_amount IS NOT NULL
             ORDER BY pw.block_number
         """),
+        ("Depth", "SELECT block_number, truth_depth FROM storage_incentives_events WHERE event_type = 'TruthSelected' AND truth_depth IS NOT NULL"),
     ]
 
 
-def load_dataframes(settings=None):
+def since_days():
+    """Window in days from SINCE_DAYS (unset or empty = full history)."""
+    v = os.getenv("SINCE_DAYS", "").strip()
+    return int(v) if v else None
+
+
+def title_suffix(days):
+    if not days:
+        return ""
+    return " · last 24 hours" if days == 1 else f" · last {days} days"
+
+
+def load_dataframes(settings=None, days=None):
     """Run every series query and return {label: DataFrame indexed by block_number}.
 
     The derived 'Reward per Node' series (10-round rolling pot / commits) replaces the raw
-    query result. Returns an empty dict if the database has no data.
+    query result. With `days`, only blocks from the last that many days are kept (the cutoff
+    block is looked up from block timestamps). Returns an empty dict if there is no data.
     """
     settings = settings or db_settings()
     conn = psycopg2.connect(**settings)
     dataframes = {}
+    cutoff = None
     try:
+        if days:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT min(block_number) FROM storage_incentives_events "
+                "WHERE block_timestamp >= extract(epoch FROM now() - make_interval(days => %s))",
+                (days,),
+            )
+            cutoff = cur.fetchone()[0]
+            cur.close()
         for label, sql in series_queries():
             df = pd.read_sql(sql, conn)
             if not df.empty:
@@ -109,14 +158,19 @@ def load_dataframes(settings=None):
         raw_df['reward_per_node'] = raw_df['pot_sum'] / raw_df['commit_sum'].replace(0, np.nan)
         dataframes['Reward per Node'] = raw_df.set_index('block_number')[['reward_per_node']].dropna()
 
+    if cutoff is not None:
+        dataframes = {k: v[v.index >= cutoff] for k, v in dataframes.items()}
+        dataframes = {k: v for k, v in dataframes.items() if not v.empty}
+
     return dataframes
 
 
 def fetch_and_plot_metrics(export_filename=None):
     dbname = db_settings()["dbname"]
+    days = since_days()
 
     try:
-        dataframes = load_dataframes()
+        dataframes = load_dataframes(days=days)
         if not dataframes:
             print("No data found.")
             return
@@ -125,8 +179,8 @@ def fetch_and_plot_metrics(export_filename=None):
         min_block, max_block = int(all_indices.min()), int(all_indices.max())
         full_timeline = pd.DataFrame(index=range(min_block, max_block + 1))
 
-        cb_colors = ['#0072B2', '#D55E00', '#009E73', '#FFFFAA', '#F0E442', '#56B4E9']
-        neon_orange = '#FF5F1F'
+        cb_colors = CB_COLORS
+        neon_orange = NEON_ORANGE
         
         fig, ax_main = plt.subplots(figsize=(19.2, 10.8), dpi=100, facecolor='#0B0B0B')
         ax_main.set_facecolor('#0B0B0B')
@@ -178,7 +232,8 @@ def fetch_and_plot_metrics(export_filename=None):
                     # White cross marker
                     item = ax.scatter(x, y, color='white', label=label, s=50, marker='+', edgecolors='none', alpha=0.8, zorder=3)
                 else:
-                    item = ax.scatter(x, y, color=color, label=label, s=50, edgecolors='none', alpha=0.6, zorder=3)
+                    item = ax.scatter(x, y, color=color, label=label, s=50, marker=marker_for(label),
+                                      edgecolors='none', alpha=0.6, zorder=3)
                 lines_and_scatters.append(item)
                 ax.set_ylabel(label, color=color, fontweight='bold', fontsize=9)
                 ax.tick_params(axis='y', labelcolor=color)
@@ -188,8 +243,11 @@ def fetch_and_plot_metrics(export_filename=None):
             ax.spines['right'].set_color('#333333')
 
         ax_main.set_xlabel('Block Number', fontsize=12, fontweight='bold', color='#E0E0E0')
-        plt.title(f'Storage Incentives Metrics\nDatabase: {dbname}', 
-                  fontsize=18, pad=35, color='white', fontweight='bold')
+        # Title large, subtitle small (set_title can only do one size, so the subtitle is a text line below it)
+        ax_main.set_title(TITLE, fontsize=18, pad=30, color='white', fontweight='bold')
+        ax_main.text(0.5, 1.012, f'Database: {dbname}{title_suffix(days)}',
+                     transform=ax_main.transAxes, ha='center', va='bottom',
+                     fontsize=10, color='#AAAAAA')
         
         # Legend styling
         labels = [obj.get_label() for obj in lines_and_scatters]

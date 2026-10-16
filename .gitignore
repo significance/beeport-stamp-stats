@@ -26,6 +26,8 @@ stamp-cache.db
 # Generated interactive dashboard (~13 MB, rebuild with `just graph-html`)
 /plots/*.html
 /plots/__pycache__/
+# Windowed PNGs (just graph-3-month / -1-month / -1-week / -1-day); only the full-history PNG is committed
+/plots/incentives_hero_dashboard_*.png
 
 # OS
 .DS_Store

@@ -8,6 +8,7 @@ db     := "beeport_tx_prod"
 bin    := "./target/release/beeport-stamp-stats"
 logdir := "logs"
 port   := "8787"
+days   := ""        # window for the graph recipes: "" = full history, e.g. `just days=30 graph-dev`
 
 default:
     @just --list --unsorted
@@ -57,19 +58,37 @@ status:
       psql -tA {{db}} -c "SELECT 'cached price: '||value FROM cache_metadata WHERE key='last_price'"; \
       pgrep -f beeport-stamp-stats >/dev/null && echo "a sync is RUNNING" || echo "no sync running"
 
-# Render the dashboard headless to plots/incentives_hero_dashboard.png and open it
-graph:
-    cd plots && MPLBACKEND=Agg DB_NAME={{db}} python3 -c "import plot; plot.fetch_and_plot_metrics('incentives_hero_dashboard.png')"
+# Render the dashboard PNG for a time window and open it. window = days ("" = all), suffix = file name tag.
+_graph window suffix:
+    cd plots && MPLBACKEND=Agg DB_NAME={{db}} SINCE_DAYS={{window}} python3 -c "import plot; plot.fetch_and_plot_metrics('incentives_hero_dashboard{{suffix}}.png')"
     rm -rf plots/__pycache__
-    open plots/incentives_hero_dashboard.png
+    open plots/incentives_hero_dashboard{{suffix}}.png
+
+# Full history → plots/incentives_hero_dashboard.png (the committed one)
+graph-all: (_graph "" "")
+
+# Last 90 days → plots/incentives_hero_dashboard_3m.png
+graph-3-month: (_graph "90" "_3m")
+
+# Last 30 days → plots/incentives_hero_dashboard_1m.png
+graph-1-month: (_graph "30" "_1m")
+
+# Last 7 days → plots/incentives_hero_dashboard_1w.png
+graph-1-week: (_graph "7" "_1w")
+
+# Last 24 hours → plots/incentives_hero_dashboard_1d.png
+graph-1-day: (_graph "1" "_1d")
+
+# Alias for graph-all
+graph: graph-all
 
 # Render the dashboard in an interactive matplotlib window (zoom/pan)
 graph-interactive:
-    cd plots && DB_NAME={{db}} python3 plot.py
+    cd plots && DB_NAME={{db}} SINCE_DAYS={{days}} python3 plot.py
 
 # Build the interactive HTML dashboard (plotly) at plots/incentives_hero_dashboard.html
 graph-html:
-    cd plots && DB_NAME={{db}} python3 plot_html.py incentives_hero_dashboard.html
+    cd plots && DB_NAME={{db}} SINCE_DAYS={{days}} python3 plot_html.py incentives_hero_dashboard.html
     rm -rf plots/__pycache__
 
 # Build the HTML dashboard and serve plots/ on http://localhost:{{port}} (Node http-server), opening the browser

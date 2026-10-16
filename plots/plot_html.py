@@ -6,19 +6,17 @@ the PNG. Output is a single self-contained HTML file (plotly.js inlined, ~4 MB).
 
     python3 plot_html.py                       # writes incentives_hero_dashboard.html here
     python3 plot_html.py path/to/out.html
+    SINCE_DAYS=90 python3 plot_html.py         # last 90 days only
 """
 import sys
 
 import plotly.graph_objects as go
 
-from plot import db_settings, load_dataframes
-
-# Same palette as plot.py
-CB_COLORS = ['#0072B2', '#D55E00', '#009E73', '#FFFFAA', '#F0E442', '#56B4E9']
-NEON_ORANGE = '#FF5F1F'
+from plot import (CB_COLORS, NEON_ORANGE, TITLE, db_settings, load_dataframes, marker_for,
+                  since_days, title_suffix)
 
 
-def build_figure(dataframes, dbname):
+def build_figure(dataframes, dbname, days=None):
     fig = go.Figure()
     layout_axes = {}
     labels = list(dataframes.keys())
@@ -54,7 +52,7 @@ def build_figure(dataframes, dbname):
         else:
             fig.add_trace(go.Scatter(
                 x=x, y=y, name=label, yaxis=axis_id, mode="markers",
-                marker=dict(size=6, color=color, opacity=0.6),
+                marker=dict(symbol=marker_for(label, "plotly"), size=7, color=color, opacity=0.6),
                 hovertemplate="block %{x}<br>%{y}<extra>" + label + "</extra>",
             ))
 
@@ -73,7 +71,7 @@ def build_figure(dataframes, dbname):
         layout_axes[axis_key] = axis
 
     fig.update_layout(
-        title=dict(text=f"Storage Incentives Metrics<br><sup>Database: {dbname}</sup>",
+        title=dict(text=f"{TITLE}<br><span style='font-size:12px;color:#AAAAAA'>Database: {dbname}{title_suffix(days)}</span>",
                    font=dict(color="white", size=20), x=0.5),
         template="plotly_dark",
         paper_bgcolor="#0B0B0B",
@@ -90,11 +88,12 @@ def build_figure(dataframes, dbname):
 
 def main(out="incentives_hero_dashboard.html"):
     settings = db_settings()
-    dataframes = load_dataframes(settings)
+    days = since_days()
+    dataframes = load_dataframes(settings, days=days)
     if not dataframes:
         print("No data found.")
         return 1
-    fig = build_figure(dataframes, settings["dbname"])
+    fig = build_figure(dataframes, settings["dbname"], days)
     fig.write_html(out, include_plotlyjs=True, full_html=True)
     print(f"Wrote {out}")
     return 0
